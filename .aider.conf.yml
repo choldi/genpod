@@ -1,0 +1,41 @@
+# ============================================================
+# Configuración de Aider para TMS
+# Usa Litellm como proxy (compatible OpenAI API)
+# Litellm está en la IP de Tailscale: http://100.x.x.x:4000
+# ============================================================
+
+# --- Conexión a Litellm ---
+openai-api-base: http://debwk.elver-exponential.ts.net:6000/v1     # IP de Litellm en Tailscale
+
+# --- Modelo principal (gratuito, uso diario) ---
+model: openai/llama-sysadmin
+
+# --- Modelo para edición débil ---
+weak-model: openai/agent1
+#weak-model: openai/tms-fast
+
+# --- Modelo para edición fuerte / arquitectura ---
+editor-model: openai/tms-architect
+
+# --- Archivos de contexto ---
+read:
+  - CONVENTIONS.md
+  - Achitecture.md
+  - Phases.md  
+
+# --- Opciones de edición ---
+edit-format: whole
+auto-commits: true
+dark-mode: true
+
+# --- Suprimir warnings de modelos ---
+no-show-model-warnings: true
+
+# --- Archivos ignorados ---
+#ignore-files:
+  #- "*.pyc"
+  #- "__pycache__"
+  #- ".env"
+  #- "*.log"
+  #- ".mypy_cache/"
+  #- "*.egg-info/"
