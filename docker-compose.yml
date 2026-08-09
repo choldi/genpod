@@ -1,0 +1,37 @@
+version: "3.8"
+
+services:
+  genpod-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: lighttts-api
+    ports:
+      - "${PORT:-8000}:8000"
+    environment:
+      - PORT=${PORT:-8000}
+      - DEVICE=${DEVICE:-cpu}
+      - MODELS_PATH=/app/data/models
+      - VOICES_PATH=/app/data/voices
+    volumes:
+      - ./data/models:/app/data/models
+      - ./data/voices:/app/data/voices
+    env_file:
+      - .env
+    profiles:
+      - cpu
+      - gpu
+
+# GPU profile override
+# Usage: docker compose --profile gpu up
+services:
+  genpod-api:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    environment:
+      - DEVICE=cuda
