@@ -8,26 +8,26 @@
 # Phases.md
 
 This document tracks the implementation progress of the CosyVoice 2 TTS & Cloning service. 
-**Current Phase:** [ ] Phase 1
+**Current Phase:** [x] Phase 2
 
 ## Phase 1: Project Scaffolding & Docker Base
-- [ ] Create the directory structure as defined in `Architecture.md`.
-- [ ] Create `requirements.txt` (fastapi, uvicorn, httpx, pydantic-settings, torch, torchaudio).
-- [ ] Create `.env.example` with default configurations (PORT, DEVICE, MODELS_PATH, VOICES_PATH).
-- [ ] Create `core/config.py` using `pydantic-settings` to load the `.env`.
-- [ ] Create the base `Dockerfile` (Python 3.10-slim, install system deps for audio, copy requirements).
-- [ ] Create `docker-compose.yml` with `cpu` and `gpu` profiles, defining volumes for `data/models` and `data/voices`.
-- [ ] Create `docker/entrypoint.sh` to handle initial setup.
+- [x] Create the directory structure as defined in `Architecture.md`.
+- [x] Create `requirements.txt` (fastapi, uvicorn, httpx, pydantic-settings, torch, torchaudio).
+- [x] Create `.env.example` with default configurations (PORT, DEVICE, MODELS_PATH, VOICES_PATH).
+- [x] Create `core/config.py` using `pydantic-settings` to load the `.env`.
+- [x] Create the base `Dockerfile` (Python 3.10-slim, install system deps for audio, copy requirements).
+- [x] Create `docker-compose.yml` with `cpu` and `gpu` profiles, defining volumes for `data/models` and `data/voices`.
+- [x] Create `docker/entrypoint.sh` to handle initial setup.
 
 ## Phase 2: Core Engine (lightTTS Wrapper)
-- [ ] Create `core/exceptions.py` with custom errors.
-- [ ] Implement `core/lighttts/engine.py`:
-  - [ ] Class `LightTTSEngine`.
-  - [ ] `__init__`: Initialize CosyVoice 2 model (handle CPU/GPU device placement).
-  - [ ] `list_voices()`: Scan `data/voices/` and default models.
-  - [ ] `synthesize(text, voice_id, lang)`: Generator yielding audio chunks.
-  - [ ] `clone_voice(audio_path, transcript, voice_name)`: Extract embeddings and save profile.
-- [ ] Implement `core/lighttts/voice_manager.py` to handle reading/writing voice metadata (JSON).
+- [x] Create `core/exceptions.py` with custom errors.
+- [x] Implement `core/lighttts/engine.py`:
+  - [x] Class `LightTTSEngine`.
+  - [x] `__init__`: Initialize CosyVoice 2 model (handle CPU/GPU device placement).
+  - [x] `list_voices()`: Scan `data/voices/` and default models.
+  - [x] `synthesize(text, voice_id, lang)`: Generator yielding audio chunks.
+  - [x] `clone_voice(audio_path, transcript, voice_name)`: Extract embeddings and save profile.
+- [x] Implement `core/lighttts/voice_manager.py` to handle reading/writing voice metadata (JSON).
 
 ## Phase 3: FastAPI Backend
 - [ ] Create `api/schemas.py` with Pydantic models for TTS and Clone requests/responses.
@@ -49,3 +49,4 @@ This document tracks the implementation progress of the CosyVoice 2 TTS & Clonin
 - [ ] Test the full Docker build process for both CPU and GPU profiles.
 - [ ] End-to-end test: Start container -> CLI list voices -> CLI TTS -> CLI Clone -> CLI TTS with cloned voice.
 - [ ] Add a `README.md` with final usage instructions.
+```
