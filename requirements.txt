@@ -5,5 +5,6 @@ pydantic-settings==2.3.0
 torch==2.3.0
 torchaudio==2.3.0
 python-multipart==0.0.9
+rich==13.7.0
 # CosyVoice 2 - install from GitHub (not on PyPI)
 # pip install -U git+https://github.com/FunAudioLLM/CosyVoice.git
