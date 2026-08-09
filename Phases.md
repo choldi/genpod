@@ -11,6 +11,7 @@ This document tracks the implementation progress of the CosyVoice 2 TTS & Clonin
 - [x] Create the base `Dockerfile` (Python 3.10-slim, install system deps for audio, copy requirements).
 - [x] Create `docker-compose.yml` with `cpu` and `gpu` profiles, defining volumes for `data/models` and `data/voices`.
 - [x] Create `docker/entrypoint.sh` to handle initial setup.
+  - **Nota:** Se corrigió la estructura a archivos de override.
 
 ## Phase 2: Core Engine (lightTTS Wrapper)
 - [x] Create `core/exceptions.py` with custom errors.

@@ -20,18 +20,3 @@ services:
       - .env
     profiles:
       - cpu
-      - gpu
-
-# GPU profile override
-# Usage: docker compose --profile gpu up
-services:
-  genpod-api:
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-    environment:
-      - DEVICE=cuda
