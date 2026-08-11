@@ -12,11 +12,10 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir --user -r requirements.txt
 
-# Clonar e instalar CosyVoice en la etapa builder
-RUN git clone https://github.com/QwenAudio/CosyVoice.git /opt/cosyvoice
+# Clonar CosyVoice e instalar sus dependencias específicas
+RUN git clone --recursive https://github.com/QwenAudio/CosyVoice.git /opt/cosyvoice
 WORKDIR /opt/cosyvoice
-RUN git submodule update --init --recursive
-RUN pip install --no-cache-dir --user .
+RUN pip install --no-cache-dir --user -r requirements.txt
 
 WORKDIR /app
 
@@ -32,7 +31,12 @@ RUN groupadd -r appuser && useradd -r -g appuser appuser
 
 WORKDIR /app
 
+# Copiar las dependencias de Python instaladas en el builder
 COPY --from=builder /root/.local /home/appuser/.local
+
+# Copiar el código fuente de CosyVoice a la imagen final
+COPY --from=builder /opt/cosyvoice /opt/cosyvoice
+
 COPY --chown=appuser:appuser . .
 
 RUN mkdir -p /app/data/models /app/data/voices && chown -R appuser:appuser /app/data
@@ -40,7 +44,8 @@ RUN mkdir -p /app/data/models /app/data/voices && chown -R appuser:appuser /app/
 RUN chmod +x /app/docker/entrypoint.sh
 
 ENV PATH=/home/appuser/.local/bin:$PATH
-ENV PYTHONPATH=/app
+# Añadir CosyVoice y /app al PYTHONPATH para que los imports funcionen
+ENV PYTHONPATH=/opt/cosyvoice:/app:$PYTHONPATH
 
 USER appuser
 
