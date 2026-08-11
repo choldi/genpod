@@ -16,11 +16,16 @@ RUN pip install --no-cache-dir --user -r requirements.txt
 RUN git clone --recursive https://github.com/QwenAudio/CosyVoice.git /opt/cosyvoice
 WORKDIR /opt/cosyvoice
 
-# FIX DEFINITIVO: 
-# 1. Instalar una versión de setuptools que aún incluya pkg_resources (< 71.0.0)
-# 2. Usar --no-build-isolation para que pip use este setuptools y no descargue uno nuevo roto
+# FIX DEFINITIVO:
+# 1. Instalar setuptools<71 (que aún incluye pkg_resources) y wheel
 RUN pip install --no-cache-dir --user "setuptools<71.0.0" wheel
-RUN pip install --no-cache-dir --user --no-build-isolation -r requirements.txt
+
+# 2. Instalar openai-whisper primero con --no-build-isolation para que use el setuptools<71
+RUN pip install --no-cache-dir --user --no-build-isolation openai-whisper==20231117
+
+# 3. Instalar el resto de requisitos (pip omitirá openai-whisper porque ya está instalado, 
+#    y el resto se compilará con aislamiento normal, evitando el error de tensorrt)
+RUN pip install --no-cache-dir --user -r requirements.txt
 
 WORKDIR /app
 
