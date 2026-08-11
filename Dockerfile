@@ -15,6 +15,7 @@ WORKDIR /app
 
 # Copy requirements first for better caching
 COPY requirements.txt .
+COPY docker/entryfile.sh .
 
 # Install Python dependencies
 RUN pip install --no-cache-dir --user -r requirements.txt
@@ -53,6 +54,7 @@ ENV PATH=/home/appuser/.local/bin:$PATH
 EXPOSE 8000
 
 # Set entrypoint
+RUN chmod +x /app/docker/entrypoint.sh
 ENTRYPOINT ["/app/docker/entrypoint.sh"]
 
 # Default command
