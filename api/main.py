@@ -25,9 +25,9 @@ async def lifespan(app: FastAPI):
     """Application lifespan manager."""
     logger.info("Starting up LightTTS API...")
     settings = get_settings()
-    logger.info(f"Device: {settings.device}")
-    logger.info(f"Models path: {settings.models_path}")
-    logger.info(f"Voices path: {settings.voices_path}")
+    logger.info(f"Device: {settings.DEVICE}")
+    logger.info(f"Models path: {settings.MODELS_PATH}")
+    logger.info(f"Voices path: {settings.VOICES_PATH}")
     yield
     logger.info("Shutting down LightTTS API...")
 
@@ -72,7 +72,7 @@ async def health():
         "status": "ok",
         "version": "1.0.0",
         "model_loaded": model_loaded,
-        "device": settings.device,
+        "device": settings.DEVICE,
     }
 
 

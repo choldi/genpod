@@ -21,8 +21,8 @@ def get_lighttts_engine() -> LightTTSEngine:
     if _lighttts_engine is None:
         s = get_settings()
         _lighttts_engine = LightTTSEngine(
-            models_path=s.models_path,
-            voices_path=s.voices_path,
-            device=s.device,
+            models_path=s.MODELS_PATH,
+            voices_path=s.VOICES_PATH,
+            device=s.DEVICE,
         )
     return _lighttts_engine
