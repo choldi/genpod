@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   genpod-api:
     build:
@@ -18,5 +16,4 @@ services:
       - ./data/voices:/app/data/voices
     env_file:
       - .env
-    profiles:
-      - cpu
+    restart: unless-stopped

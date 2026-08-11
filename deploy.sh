@@ -69,10 +69,10 @@ echo -e "${YELLOW}⚠️  NOTA: La primera vez descargará el modelo CosyVoice 2
 
 if [ "$HAS_GPU" = true ] && [[ "$USE_GPU" =~ ^[Ss]$ ]]; then
     echo "Arrancando con perfil GPU..."
-    docker compose --profile gpu -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
+    docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
 else
     echo "Arrancando con perfil CPU..."
-    docker compose --profile cpu up -d --build
+    docker compose up -d --build
 fi
 
 # 5. Verificación
