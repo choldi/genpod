@@ -9,3 +9,4 @@ rich==13.7.0
 # CosyVoice 2 - install from GitHub (not on PyPI)
 # pip install -U git+https://github.com/FunAudioLLM/CosyVoice.git
 numpy
+git+https://github.com/FunAudioLLM/CosyVoice.git
