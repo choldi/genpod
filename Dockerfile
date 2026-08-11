@@ -15,6 +15,9 @@ RUN pip install --no-cache-dir --user -r requirements.txt
 # Clonar CosyVoice e instalar sus dependencias específicas
 RUN git clone --recursive https://github.com/QwenAudio/CosyVoice.git /opt/cosyvoice
 WORKDIR /opt/cosyvoice
+
+# FIX: Instalar setuptools para proporcionar pkg_resources (necesario para compilar openai-whisper)
+RUN pip install --no-cache-dir --user --upgrade setuptools
 RUN pip install --no-cache-dir --user -r requirements.txt
 
 WORKDIR /app
@@ -50,4 +53,3 @@ ENV PYTHONPATH=/opt/cosyvoice:/app:$PYTHONPATH
 USER appuser
 
 ENTRYPOINT ["/app/docker/entrypoint.sh"]
-
