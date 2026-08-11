@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   genpod-api:
     deploy:
@@ -11,5 +9,3 @@ services:
               capabilities: [gpu]
     environment:
       - DEVICE=cuda
-    profiles:
-      - gpu
