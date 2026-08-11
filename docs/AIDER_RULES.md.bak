@@ -1,0 +1,19 @@
+# Reglas para Aider
+
+## Comportamiento General
+- Sigue estrictamente las convenciones definidas en CONVENTIONS.md.
+- Antes de modificar un archivo, explica el impacto en el resto de los componentes.
+- No hagas commits con errores de linting o tests fallidos.
+
+## Arquitectura
+- Respeta la separación de capas definida en el proyecto (ej. dominio, aplicación, infraestructura).
+- No añadir nuevas dependencias sin discutirlo primero.
+- Mantén la lógica de negocio independiente del framework.
+
+## Estado y Navegación
+- Si el proyecto tiene interfaz, el estado debe vivir en el backend o en un gestor centralizado.
+- No dupliques lógica de navegación o estado en múltiples lugares.
+
+## Commits
+- Usa mensajes de commit convencionales (feat:, fix:, refactor:, docs:, chore:).
+- Realiza commits atómicos: un cambio lógico por commit.

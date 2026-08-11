@@ -8,20 +8,20 @@
 openai-api-base: http://debwk.elver-exponential.ts.net:6000/v1     # IP de Litellm en Tailscale
 
 # --- Modelo principal (gratuito, uso diario) ---
-model: openai/llama-sysadmin
+model: openai/llama3.1:8b
 
 # --- Modelo para edición débil ---
-weak-model: openai/agent1
+weak-model: openai/phi3:mini
 #weak-model: openai/tms-fast
 
 # --- Modelo para edición fuerte / arquitectura ---
 editor-model: openai/tms-architect
 
 # --- Archivos de contexto ---
-read:
-  - CONVENTIONS.md
-  - Achitecture.md
-  - Phases.md  
+#read:
+  #- CONVENTIONS.md
+  #- Architecture.md
+  #- Phases.md  
 
 # --- Opciones de edición ---
 edit-format: whole

@@ -1,0 +1,26 @@
+# Memoria de Aider
+
+**Última actualización:** 09 de agosto de 2026 20:48  
+**Fase actual:** 1 (Inicial)  
+**Rama:** master
+
+## Resumen del proyecto
+{{PROJECT_SUMMARY}}
+
+## Estado actual
+Fase inicial. Definición de requisitos y estructura base del proyecto.
+
+## Últimos cambios (últimos 5 commits)
+d8638b3 feat: completar lightTTS con 5 fases, docs, Docker entrypoint y CLI
+d157a9c docs: agregar README con descripción de la plantilla para Aider
+9d6b72f feat: implementar motor CosyVoice 2 con síntesis y clonación de voz
+0bb5812 chore: initialize project structure and conventions
+
+## Archivos modificados en estos commits
+  - (no git diff)
+
+## Tareas pendientes (TODO/FIXME)
+  - (none)
+
+## Decisiones arquitectónicas vigentes
+{{ARCHITECTURE_DECISIONS}}
