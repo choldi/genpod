@@ -15,7 +15,6 @@ WORKDIR /app
 
 # Copy requirements first for better caching
 COPY requirements.txt .
-COPY docker/entryfile.sh .
 
 # Install Python dependencies
 RUN pip install --no-cache-dir --user -r requirements.txt
