@@ -43,6 +43,13 @@ COPY --chown=appuser:appuser . .
 # Create data directories
 RUN mkdir -p /app/data/models /app/data/voices && chown -R appuser:appuser /app/data
 
+#   USER root
+RUN git clone https://github.com/FunAudioLLM/CosyVoice.git /opt/cosyvoice
+WORKDIR /opt/cosyvoice
+RUN git submodule update --init --recursive
+RUN pip install --no-cache-dir --user .
+WORKDIR /app
+
 # Switch to non-root user
 USER appuser
 
