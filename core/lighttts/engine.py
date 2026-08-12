@@ -156,12 +156,19 @@ class LightTTSEngine:
 
         try:
             # Determine if it's a base voice or cloned voice
-            if voice_id.startswith("base_"):
-                spk_id = voice_id.replace("base_", "")
-                yield from self._synthesize_base(text, spk_id, stream)
-            else:
-                yield from self._synthesize_cloned(text, voice_id, stream)
+            # Check if it is a cloned voice
+            is_cloned = False
+            try:
+                metadata = self._voice_manager.load_voice_metadata(voice_id)
+                if metadata.get("is_cloned"):
+                    is_cloned = True
+            except Exception:
+                pass  # Not a cloned voice, will use base synthesis
 
+            if is_cloned:
+                yield from self._synthesize_cloned(text, voice_id, stream)
+            else:
+                yield from self._synthesize_base(text, voice_id, stream)
         except Exception as e:
             raise SynthesisError(f"Synthesis failed: {e}") from e
 
