@@ -62,7 +62,7 @@ class LightTTSEngine:
         """Load the CosyVoice 2 model."""
         try:
             # Import CosyVoice 2 - this will fail if not installed
-            from cosyvoice.cli.cosyvoice import CosyVoice2
+            from cosyvoice.cli.cosyvoice import AutoModel
             from cosyvoice.utils.file_utils import load_wav
 
             # Store imports for later use
