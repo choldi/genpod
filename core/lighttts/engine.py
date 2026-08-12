@@ -100,20 +100,39 @@ class LightTTSEngine:
                 "sample_rate": voice.get("sample_rate", 24000),
             })
 
-        # Add base voices from CosyVoice 2 (pre-trained speakers)
-        if self._model and hasattr(self._model, 'list_available_spks'):
+        # Add known base voices from CosyVoice 2-0.5B as fallback
+        known_base_voices = [
+            ("中文女", "zh", "Base Chinese Female"),
+            ("中文男", "zh", "Base Chinese Male"),
+            ("英文女", "en", "Base English Female"),
+            ("英文男", "en", "Base English Male"),
+            ("日本語女", "ja", "Base Japanese Female"),
+            ("한국어女", "ko", "Base Korean Female"),
+        ]
+        
+        dynamic_spks = []
+        if self._model and hasattr(self._model, "list_available_spks"):
             try:
-                base_spks = self._model.list_available_spks()
-                for spk in base_spks:
-                    voices.append({
-                        "voice_id": f"base_{spk}",
-                        "name": f"Base {spk.capitalize()}",
-                        "language": "en",
-                        "gender": "unknown",
-                        "is_cloned": False,
-                        "sample_rate": 24000,
-                    })
+                dynamic_spks = self._model.list_available_spks()
             except Exception:
+                pass
+
+        spks_to_use = dynamic_spks if dynamic_spks else [v[0] for v in known_base_voices]
+        
+        for spk in spks_to_use:
+            lang, name = "en", f"Base {spk}"
+            for k_spk, k_lang, k_name in known_base_voices:
+                if spk == k_spk:
+                    lang, name = k_lang, k_name
+                    break
+            voices.append({
+                "voice_id": spk,
+                "name": name,
+                "language": lang,
+                "gender": "unknown",
+                "is_cloned": False,
+                "sample_rate": 24000,
+            })
                 pass  # Base voice listing optional
 
         return voices
