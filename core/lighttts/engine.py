@@ -166,11 +166,13 @@ class LightTTSEngine:
         # CosyVoice 2 uses inference_sft for base speakers
         # This generates the full audio at once, we'll chunk it for streaming
         try:
-            # Generate speech
-            output = self._model.inference_sft(text, spk_id, stream=False)
+            # Generate speech (inference_sft returns a generator yielding dicts)
+            output_generator = self._model.inference_sft(text, spk_id, stream=False)
             
-            # output is a dict with 'tts_speech' tensor
-            speech = output['tts_speech']
+            # Get the first (and usually only) chunk from the generator
+            for out_dict in output_generator:
+                speech = out_dict['tts_speech']
+                break
             
             # Convert to bytes (WAV format)
             import io
@@ -210,11 +212,14 @@ class LightTTSEngine:
             # It needs the reference speech and the prompt text (transcript)
             prompt_text = metadata.get("transcript", "")
             
-            output = self._model.inference_zero_shot(
+            output_generator = self._model.inference_zero_shot(
                 text, prompt_text, ref_speech.unsqueeze(0), stream=False
             )
             
-            speech = output['tts_speech']
+            # Get the first chunk from the generator
+            for out_dict in output_generator:
+                speech = out_dict['tts_speech']
+                break
             
             # Convert to bytes
             import io
