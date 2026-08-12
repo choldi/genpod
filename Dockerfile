@@ -11,7 +11,7 @@ WORKDIR /app
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir --user -r requirements.txt
-RUN pip install --no-cache-dir --user --upgrade deepspeed transformers
+RUN pip install --no-cache-dir --user "transformers<4.38"
 
 # Clonar CosyVoice e instalar sus dependencias específicas
 RUN git clone --recursive https://github.com/QwenAudio/CosyVoice.git /opt/cosyvoice
@@ -27,7 +27,7 @@ RUN pip install --no-cache-dir --user --no-build-isolation openai-whisper==20231
 # 3. Instalar el resto de requisitos (pip omitirá openai-whisper porque ya está instalado, 
 #    y el resto se compilará con aislamiento normal, evitando el error de tensorrt)
 RUN pip install --no-cache-dir --user -r requirements.txt
-RUN pip install --no-cache-dir --user --upgrade deepspeed transformers
+RUN pip install --no-cache-dir --user "transformers<4.38"
 
 WORKDIR /app
 
