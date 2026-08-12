@@ -74,7 +74,6 @@ class LightTTSEngine:
 
             print(f"Loading CosyVoice 2 model from {model_dir} on {self.device}...")
             self._model = CosyVoice2(str(model_dir), load_jit=False, fp16=(self.device == "cuda"))
-            self._model.model.to(self.device)
             print("Model loaded successfully!")
 
         except ImportError as e:
