@@ -19,6 +19,16 @@ from core.exceptions import (
 )
 from core.lighttts.voice_manager import VoiceManager
 
+# Mapping from simple API aliases to actual CosyVoice speaker IDs
+VOICE_ALIAS_MAP = {
+    "zh_female": "中文女",
+    "zh_male": "中文男",
+    "en_female": "英文女",
+    "en_male": "英文男",
+    "ja_female": "日本語女",
+    "ko_female": "한국어女",
+}
+
 
 class LightTTSEngine:
     """Main wrapper class for CosyVoice 2 operations."""
@@ -95,41 +105,25 @@ class LightTTSEngine:
                 "voice_id": voice.get("voice_id", ""),
                 "name": voice.get("name", "Unknown"),
                 "language": voice.get("language", "en"),
-                "gender": voice.get("gender"),
                 "is_cloned": True,
                 "sample_rate": voice.get("sample_rate", 24000),
             })
 
-        # Add known base voices from CosyVoice 2-0.5B as fallback
+        # Add base voices with simple, easy-to-use aliases
         known_base_voices = [
-            ("中文女", "zh", "Base Chinese Female"),
-            ("中文男", "zh", "Base Chinese Male"),
-            ("英文女", "en", "Base English Female"),
-            ("英文男", "en", "Base English Male"),
-            ("日本語女", "ja", "Base Japanese Female"),
-            ("한국어女", "ko", "Base Korean Female"),
+            ("zh_female", "zh", "Base Chinese Female"),
+            ("zh_male", "zh", "Base Chinese Male"),
+            ("en_female", "en", "Base English Female"),
+            ("en_male", "en", "Base English Male"),
+            ("ja_female", "ja", "Base Japanese Female"),
+            ("ko_female", "ko", "Base Korean Female"),
         ]
         
-        dynamic_spks = []
-        if self._model and hasattr(self._model, "list_available_spks"):
-            try:
-                dynamic_spks = self._model.list_available_spks()
-            except Exception:
-                pass
-
-        spks_to_use = dynamic_spks if dynamic_spks else [v[0] for v in known_base_voices]
-        
-        for spk in spks_to_use:
-            lang, name = "en", f"Base {spk}"
-            for k_spk, k_lang, k_name in known_base_voices:
-                if spk == k_spk:
-                    lang, name = k_lang, k_name
-                    break
+        for alias, lang, name in known_base_voices:
             voices.append({
-                "voice_id": spk,
+                "voice_id": alias,
                 "name": name,
                 "language": lang,
-                "gender": "unknown",
                 "is_cloned": False,
                 "sample_rate": 24000,
             })
@@ -140,27 +134,16 @@ class LightTTSEngine:
     def synthesize(
         self, text: str, voice_id: str, lang: str = "en", stream: bool = True
     ) -> Generator[bytes, None, None]:
-        """Generate audio chunks for the given text and voice.
-
-        Args:
-            text: Text to synthesize.
-            voice_id: Voice identifier (base_* for pre-trained, or cloned voice_id).
-            lang: Language code.
-            stream: Whether to yield chunks or return full audio.
-
-        Yields:
-            Audio chunks as bytes (WAV format).
-        """
+        """Generate audio chunks for the given text and voice."""
         if not self._model:
             raise SynthesisError("Model not loaded")
 
         try:
-            # Determine if it's a base voice or cloned voice
-            # Check if it is a cloned voice
+            # Check if it's a cloned voice
             is_cloned = False
             try:
-                metadata = self._voice_manager.load_voice_metadata(voice_id)
-                if metadata.get("is_cloned"):
+                meta = self._voice_manager.load_voice_metadata(voice_id)
+                if meta and meta.get("is_cloned"):
                     is_cloned = True
             except Exception:
                 pass  # Not a cloned voice, will use base synthesis
@@ -168,9 +151,13 @@ class LightTTSEngine:
             if is_cloned:
                 yield from self._synthesize_cloned(text, voice_id, stream)
             else:
-                yield from self._synthesize_base(text, voice_id, stream)
+                # Resolve simple alias to actual CosyVoice speaker ID
+                actual_spk_id = VOICE_ALIAS_MAP.get(voice_id, voice_id)
+                yield from self._synthesize_base(text, actual_spk_id, stream)
+
         except Exception as e:
             raise SynthesisError(f"Synthesis failed: {e}") from e
+
 
     def _synthesize_base(
         self, text: str, spk_id: str, stream: bool
