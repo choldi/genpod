@@ -58,7 +58,9 @@ RUN chmod +x /app/docker/entrypoint.sh
 ENV PATH=/home/appuser/.local/bin:$PATH
 # Añadir CosyVoice y /app al PYTHONPATH para que los imports funcionen
 ENV PYTHONPATH=/opt/cosyvoice:/opt/cosyvoice/third_party/Matcha-TTS:/app:$PYTHONPATH
-
+ENV NUMBA_DISABLE_JIT=1
+ENV NUMBA_CACHE_DIR=/tmp
+   
 USER appuser
 
 ENTRYPOINT ["/app/docker/entrypoint.sh"]
