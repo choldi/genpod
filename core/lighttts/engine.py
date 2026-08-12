@@ -183,7 +183,7 @@ class LightTTSEngine:
             # Convert to bytes (WAV format)
             import io
             buffer = io.BytesIO()
-            torchaudio.save(buffer, speech.unsqueeze(0).cpu(), 24000, format="wav")
+            torchaudio.save(buffer, speech.cpu(), 24000, format="wav")
             buffer.seek(0)
             audio_bytes = buffer.read()
             
@@ -230,7 +230,7 @@ class LightTTSEngine:
             # Convert to bytes
             import io
             buffer = io.BytesIO()
-            torchaudio.save(buffer, speech.unsqueeze(0).cpu(), 24000, format="wav")
+            torchaudio.save(buffer, speech.cpu(), 24000, format="wav")
             buffer.seek(0)
             audio_bytes = buffer.read()
             
