@@ -1,3 +1,5 @@
+import logging
+logger = logging.getLogger(__name__)
 """Text-to-Speech routes."""
 
 import io
@@ -30,7 +32,7 @@ async def synthesize(
                     ):
                         yield chunk
                 except Exception as e:
-                    logger.error(f"Streaming error: {e}")
+                    logging.error(f"Streaming error: {e}")
                     raise
 
             return StreamingResponse(
