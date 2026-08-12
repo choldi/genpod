@@ -24,6 +24,26 @@ async def synthesize(
         if request.stream:
             def audio_generator():
                 try:
+    # --- MODE LOGIC ---
+    is_fast_mode = getattr(request, "mode", "studio") == "fast"
+    
+    # Adjust parameters based on mode
+    speed = getattr(request, "speed", None)
+    pitch = getattr(request, "pitch", None)
+    emotion = getattr(request, "emotion", "neutral")
+    
+    if is_fast_mode:
+        # Fast mode: optimize for low latency
+        if speed is None: speed = 1.15
+        if pitch is None: pitch = 1.0
+        stream = True
+    else:
+        # Studio mode: optimize for quality
+        if speed is None: speed = 0.95
+        if pitch is None: pitch = 1.0
+        stream = True
+    
+    # --- END MODE LOGIC ---
                     for chunk in engine.synthesize(
                         text=request.text,
                         voice_id=request.voice_id,

@@ -25,6 +25,7 @@ class TTSRequest(BaseModel):
     voice_id: str = Field(..., description="Voice identifier to use")
     language: str = Field(default="en", description="Language code")
     stream: bool = Field(default=True, description="Whether to stream the audio")
+    mode: str = "studio"  # "fast" for chat/whatsapp, "studio" for podcasts
 
 
 class TTSResponse(BaseModel):
