@@ -18,6 +18,7 @@ from core.exceptions import (
     AudioTooShortError,
 )
 from core.lighttts.voice_manager import VoiceManager
+from cosyvoice.cli.cosyvoice import CosyVoice, CosyVoice2
 
 # Mapping from simple API aliases to actual CosyVoice speaker IDs
 VOICE_ALIAS_MAP = {
@@ -62,7 +63,6 @@ class LightTTSEngine:
         """Load the CosyVoice 2 model."""
         try:
             # Import CosyVoice 2 - this will fail if not installed
-            from cosyvoice.cli.cosyvoice import AutoModel
             from cosyvoice.utils.file_utils import load_wav
 
             # Store imports for later use
@@ -83,7 +83,13 @@ class LightTTSEngine:
                     )
 
             print(f"Loading CosyVoice 2 model from {model_dir} on {self.device}...")
-            self._model = CosyVoice2(str(model_dir), load_jit=False, fp16=(self.device == "cuda"))
+            # Detect model version based on yaml file
+            if (model_dir / "cosyvoice.yaml").exists():
+                print("✅ Detected CosyVoice v1 (SFT) model")
+                self._model = CosyVoice(str(model_dir), load_jit=False, fp16=(self.device == "cuda"))
+            else:
+                print("✅ Detected CosyVoice v2 model")
+                self._model = CosyVoice2(str(model_dir), load_jit=False, fp16=(self.device == "cuda"))
             print("Model loaded successfully!")
 
         except ImportError as e:
