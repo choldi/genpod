@@ -133,9 +133,9 @@ class LightTTSEngine:
                 "is_cloned": False,
                 "sample_rate": 24000,
             })
-                pass  # Base voice listing optional
 
         return voices
+
 
     def synthesize(
         self, text: str, voice_id: str, lang: str = "en", stream: bool = True
