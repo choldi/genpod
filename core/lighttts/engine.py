@@ -170,31 +170,30 @@ class LightTTSEngine:
         self, text: str, spk_id: str, stream: bool
     ) -> Generator[bytes, None, None]:
         """Synthesize using a base (pre-trained) speaker."""
-        # CosyVoice 2 uses inference_sft for base speakers
-        # This generates the full audio at once, we'll chunk it for streaming
         try:
-            # Generate speech (inference_sft returns a generator yielding dicts)
             output_generator = self._model.inference_sft(text, spk_id, stream=False)
             
-            # Get the first (and usually only) chunk from the generator
             for out_dict in output_generator:
                 speech = out_dict['tts_speech']
-                break
-            
-            # Convert to bytes (WAV format)
-            import io
-            buffer = io.BytesIO()
-            torchaudio.save(buffer, speech.cpu(), 24000, format="wav")
-            buffer.seek(0)
-            audio_bytes = buffer.read()
-            
-            if stream:
-                # Yield in chunks (e.g., 4096 bytes)
-                chunk_size = 4096
-                for i in range(0, len(audio_bytes), chunk_size):
-                    yield audio_bytes[i:i + chunk_size]
-            else:
-                yield audio_bytes
+                
+                # Asegurar que el tensor sea 2D [1, samples] para torchaudio
+                if speech.dim() == 3:
+                    speech = speech.squeeze(0)
+                
+                import io
+                buffer = io.BytesIO()
+                # ORDEN CORRECTO: uri primero, src después
+                torchaudio.save(buffer, speech.cpu(), 24000, format="wav")
+                buffer.seek(0)
+                audio_bytes = buffer.read()
+                
+                if stream:
+                    chunk_size = 4096
+                    for i in range(0, len(audio_bytes), chunk_size):
+                        yield audio_bytes[i:i + chunk_size]
+                else:
+                    yield audio_bytes
+                break  # Solo procesamos el primer chunk del generador
 
         except Exception as e:
             raise SynthesisError(f"Base voice synthesis failed: {e}") from e
@@ -203,7 +202,6 @@ class LightTTSEngine:
         self, text: str, voice_id: str, stream: bool
     ) -> Generator[bytes, None, None]:
         """Synthesize using a cloned voice."""
-        # Load voice metadata to get reference audio path
         metadata = self._voice_manager.load_voice_metadata(voice_id)
         ref_audio_path = self.voices_path / f"{voice_id}.wav"
         
@@ -211,36 +209,44 @@ class LightTTSEngine:
             raise VoiceNotFoundError(f"Reference audio for voice '{voice_id}' not found")
 
         try:
-            # Load reference audio
-            ref_speech = self._load_wav(str(ref_audio_path), 24000)
+            # 1. Cargar audio de referencia y asegurar 16kHz (requerido por CosyVoice)
+            ref_speech, sr = torchaudio.load(str(ref_audio_path))
+            if sr != 16000:
+                resampler = torchaudio.transforms.Resample(sr, 16000)
+                ref_speech = resampler(ref_speech)
+            
+            # Mover al dispositivo correcto (CPU o CUDA)
             ref_speech = ref_speech.to(self.device)
             
-            # CosyVoice 2 uses inference_zero_shot for cloned voices
-            # It needs the reference speech and the prompt text (transcript)
             prompt_text = metadata.get("transcript", "")
             
+            # 2. Llamar a inference_zero_shot (ref_speech ya es el tensor correcto)
             output_generator = self._model.inference_zero_shot(
-                text, prompt_text, ref_speech.unsqueeze(0), stream=False
+                text, prompt_text, ref_speech, stream=False
             )
             
-            # Get the first chunk from the generator
+            # 3. Procesar la salida
             for out_dict in output_generator:
                 speech = out_dict['tts_speech']
+                
+                # Asegurar que el tensor sea 2D [1, samples]
+                if speech.dim() == 3:
+                    speech = speech.squeeze(0)
+                
+                import io
+                buffer = io.BytesIO()
+                # ORDEN CORRECTO: uri primero, src después
+                torchaudio.save(buffer, speech.cpu(), 24000, format="wav")
+                buffer.seek(0)
+                audio_bytes = buffer.read()
+                
+                if stream:
+                    chunk_size = 4096
+                    for i in range(0, len(audio_bytes), chunk_size):
+                        yield audio_bytes[i:i + chunk_size]
+                else:
+                    yield audio_bytes
                 break
-            
-            # Convert to bytes
-            import io
-            buffer = io.BytesIO()
-            torchaudio.save(buffer, speech.cpu(), 24000, format="wav")
-            buffer.seek(0)
-            audio_bytes = buffer.read()
-            
-            if stream:
-                chunk_size = 4096
-                for i in range(0, len(audio_bytes), chunk_size):
-                    yield audio_bytes[i:i + chunk_size]
-            else:
-                yield audio_bytes
 
         except Exception as e:
             raise SynthesisError(f"Cloned voice synthesis failed: {e}") from e
