@@ -176,16 +176,19 @@ class LightTTSEngine:
             for out_dict in output_generator:
                 speech = out_dict['tts_speech']
                 
-                # Asegurar que el tensor sea 2D [1, samples] para torchaudio
                 if speech.dim() == 3:
                     speech = speech.squeeze(0)
                 
-                import io
-                buffer = io.BytesIO()
-                # ORDEN CORRECTO: uri primero, src después
-                torchaudio.save(buffer, speech.cpu(), 24000, format="wav")
-                buffer.seek(0)
-                audio_bytes = buffer.read()
+                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
+                    tmp_path = tmp_file.name
+                
+                try:
+                    torchaudio.save(tmp_path, speech.cpu(), 24000, format="wav")
+                    with open(tmp_path, "rb") as f:
+                        audio_bytes = f.read()
+                finally:
+                    if os.path.exists(tmp_path):
+                        os.remove(tmp_path)
                 
                 if stream:
                     chunk_size = 4096
@@ -193,7 +196,7 @@ class LightTTSEngine:
                         yield audio_bytes[i:i + chunk_size]
                 else:
                     yield audio_bytes
-                break  # Solo procesamos el primer chunk del generador
+                break
 
         except Exception as e:
             raise SynthesisError(f"Base voice synthesis failed: {e}") from e
@@ -209,36 +212,34 @@ class LightTTSEngine:
             raise VoiceNotFoundError(f"Reference audio for voice '{voice_id}' not found")
 
         try:
-            # 1. Cargar audio de referencia y asegurar 16kHz (requerido por CosyVoice)
             ref_speech, sr = torchaudio.load(str(ref_audio_path))
             if sr != 16000:
                 resampler = torchaudio.transforms.Resample(sr, 16000)
                 ref_speech = resampler(ref_speech)
             
-            # Mover al dispositivo correcto (CPU o CUDA)
             ref_speech = ref_speech.to(self.device)
-            
             prompt_text = metadata.get("transcript", "")
             
-            # 2. Llamar a inference_zero_shot (ref_speech ya es el tensor correcto)
             output_generator = self._model.inference_zero_shot(
                 text, prompt_text, ref_speech, stream=False
             )
             
-            # 3. Procesar la salida
             for out_dict in output_generator:
                 speech = out_dict['tts_speech']
                 
-                # Asegurar que el tensor sea 2D [1, samples]
                 if speech.dim() == 3:
                     speech = speech.squeeze(0)
                 
-                import io
-                buffer = io.BytesIO()
-                # ORDEN CORRECTO: uri primero, src después
-                torchaudio.save(buffer, speech.cpu(), 24000, format="wav")
-                buffer.seek(0)
-                audio_bytes = buffer.read()
+                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
+                    tmp_path = tmp_file.name
+                
+                try:
+                    torchaudio.save(tmp_path, speech.cpu(), 24000, format="wav")
+                    with open(tmp_path, "rb") as f:
+                        audio_bytes = f.read()
+                finally:
+                    if os.path.exists(tmp_path):
+                        os.remove(tmp_path)
                 
                 if stream:
                     chunk_size = 4096
