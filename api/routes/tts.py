@@ -19,35 +19,44 @@ async def synthesize(
     request: TTSRequest,
     engine: LightTTSEngine = Depends(get_lighttts_engine),
 ):
-    """Synthesize speech from text."""
+    """Synthesize speech from text with dual mode support."""
     try:
         # --- MODE LOGIC ---
         is_fast_mode = getattr(request, "mode", "studio") == "fast"
         
+        # Get parameters with safe defaults
         speed = getattr(request, "speed", None)
         pitch = getattr(request, "pitch", None)
         emotion = getattr(request, "emotion", "neutral")
         
+        # Determine language safely (prioritize 'lang', fallback to 'language')
+        lang_val = getattr(request, "lang", getattr(request, "language", "en"))
+        
         if is_fast_mode:
-            logger.info("Mode: FAST | Optimizing for low latency")
-            if speed is None: speed = 1.15
+            logger.info(f"Mode: FAST | Lang: {lang_val} | Optimizing for low latency")
+            # Ajuste más suave para evitar pérdida de claridad
+            if speed is None: speed = 1.05 
             if pitch is None: pitch = 1.0
             stream = True
         else:
-            logger.info("Mode: STUDIO | Optimizing for quality")
+            logger.info(f"Mode: STUDIO | Lang: {lang_val} | Optimizing for quality")
+            # Ritmo natural para podcasts
             if speed is None: speed = 0.95
             if pitch is None: pitch = 1.0
             stream = True
         # --- END MODE LOGIC ---
 
-        # Determine language safely (supports both 'lang' and 'language' from schema)
-        lang_val = getattr(request, "lang", getattr(request, "language", "en"))
+        # CRITICAL: Ensure we use the EXACT text from the request
+        input_text = request.text
+        if not input_text or len(input_text.strip()) == 0:
+            raise HTTPException(status_code=400, detail="Text cannot be empty")
 
         if stream:
             def audio_generator():
                 try:
+                    logger.debug(f"Streaming synthesis: '{input_text[:50]}...'")
                     for chunk in engine.synthesize(
-                        text=request.text,
+                        text=input_text,  # Usamos la variable local limpia
                         voice_id=request.voice_id,
                         lang=lang_val,
                         speed=speed,
@@ -68,9 +77,10 @@ async def synthesize(
                 },
             )
         else:
+            logger.debug(f"Full synthesis: '{input_text[:50]}...'")
             audio_data = b""
             for chunk in engine.synthesize(
-                text=request.text,
+                text=input_text,  # Usamos la variable local limpia
                 voice_id=request.voice_id,
                 lang=lang_val,
                 speed=speed,
@@ -92,5 +102,5 @@ async def synthesize(
     except SynthesisError as e:
         raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
-        logger.error(f"Unexpected error in TTS: {e}")
+        logger.error(f"Unexpected error in TTS: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
