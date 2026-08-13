@@ -213,40 +213,29 @@ class LightTTSEngine:
             raise VoiceNotFoundError(f"Reference audio for voice '{voice_id}' not found")
 
         try:
-            # 1. Cargar audio de referencia (ya está a 24kHz desde clone_voice)
+            # 1. Cargar audio de referencia
             ref_speech, sr = torchaudio.load(str(ref_audio_path))
             
-            # Asegurar mono y 16kHz (requerido por CosyVoice para zero-shot)
+            # 2. Asegurar MONO (crítico para CosyVoice)
             if ref_speech.shape[0] > 1:
                 ref_speech = ref_speech.mean(dim=0, keepdim=True)
+            
+            # 3. Asegurar 16kHz (requerido por CosyVoice zero-shot)
             if sr != 16000:
                 resampler = torchaudio.transforms.Resample(sr, 16000)
                 ref_speech = resampler(ref_speech)
             
+            # 4. Mover al dispositivo
+            ref_speech = ref_speech.to(self.device)
+            
             prompt_text = metadata.get("transcript", "")
-            language = metadata.get("language", "en")
             
-            # 2. Determinar qué API usar según el modelo detectado
-            if isinstance(self._model, CosyVoice):
-                # CosyVoice v1 (SFT) - usa inference_zero_shot con tensor
-                # El modelo espera: text, prompt_text, prompt_speech_tensor
-                output_generator = self._model.inference_zero_shot(
-                    text=text,
-                    prompt_text=prompt_text,
-                    prompt_speech=ref_speech.to(self.device),
-                    stream=False
-                )
-            else:
-                # CosyVoice v2 - puede aceptar ruta o tensor
-                output_generator = self._model.inference_zero_shot(
-                    text=text,
-                    prompt_text=prompt_text,
-                    prompt_speech=ref_speech.to(self.device),
-                    lang=language,
-                    stream=False
-                )
+            # 5. LLAMADA CON ARGUMENTOS POSICIONALES (no keyword)
+            output_generator = self._model.inference_zero_shot(
+                text, prompt_text, ref_speech, stream=False
+            )
             
-            # 3. Procesar la salida
+            # 6. Procesar la salida
             for out_dict in output_generator:
                 speech = out_dict['tts_speech']
                 
