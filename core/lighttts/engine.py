@@ -213,33 +213,29 @@ class LightTTSEngine:
             raise VoiceNotFoundError(f"Reference audio for voice '{voice_id}' not found")
 
         try:
-            # 1. Cargar audio de referencia
-            ref_speech, sr = torchaudio.load(str(ref_audio_path))
-            
-            # 2. Asegurar MONO (crítico para CosyVoice)
-            if ref_speech.shape[0] > 1:
-                ref_speech = ref_speech.mean(dim=0, keepdim=True)
-            
-            # 3. Asegurar 16kHz (requerido por CosyVoice zero-shot)
-            if sr != 16000:
-                resampler = torchaudio.transforms.Resample(sr, 16000)
-                ref_speech = resampler(ref_speech)
-            
-            # 4. Mover al dispositivo
-            ref_speech = ref_speech.to(self.device)
-            
             prompt_text = metadata.get("transcript", "")
             
-            # 5. LLAMADA CON ARGUMENTOS POSICIONALES (no keyword)
+            # CRÍTICO: CosyVoice v1 SFT requiere usar load_wav para procesar el audio de referencia
+            # Esto devuelve un tensor ya formateado correctamente para el modelo
+            ref_speech = self._load_wav(str(ref_audio_path), 16000)
+            
+            # Mover al dispositivo correcto
+            ref_speech = ref_speech.to(self.device)
+            
+            # LLAMADA CORRECTA PARA COSYVOICE V1: Argumentos posicionales
+            # inference_zero_shot(text, prompt_text, prompt_speech_tensor, stream)
             output_generator = self._model.inference_zero_shot(
-                text, prompt_text, ref_speech, stream=False
+                text, 
+                prompt_text, 
+                ref_speech, 
+                False  # stream=False para obtener todo el audio de una vez
             )
             
-            # 6. Procesar la salida
+            # Procesar la salida
             for out_dict in output_generator:
                 speech = out_dict['tts_speech']
                 
-                # Asegurar formato correcto
+                # Asegurar formato [canales, muestras]
                 if speech.dim() == 3:
                     speech = speech.squeeze(0)
                 if speech.dim() == 1:
