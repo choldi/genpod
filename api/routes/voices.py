@@ -27,3 +27,30 @@ async def list_voices(engine: LightTTSEngine = Depends(get_lighttts_engine)):
         return VoiceListResponse(voices=voice_infos, total=len(voice_infos))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.delete("/voices/{voice_id}")
+async def delete_voice(
+    voice_id: str,
+    engine: LightTTSEngine = Depends(get_lighttts_engine)
+):
+    """Delete a cloned voice by ID."""
+    try:
+        # Llamamos al método del motor para borrar la voz
+        # Asumimos que el motor tiene un método 'delete_voice' o similar
+        if hasattr(engine, 'delete_voice'):
+            engine.delete_voice(voice_id)
+            return {"message": f"Voice '{voice_id}' deleted successfully"}
+        else:
+            # Fallback si el motor no tiene el método directo:
+            # Intentamos borrarlo del directorio de voces manualmente
+            import os
+            voice_path = os.path.join(engine.voices_path, voice_id)
+            if os.path.exists(voice_path):
+                import shutil
+                shutil.rmtree(voice_path)
+                return {"message": f"Voice '{voice_id}' deleted from disk"}
+            else:
+                raise HTTPException(status_code=404, detail=f"Voice '{voice_id}' not found")
+                
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
