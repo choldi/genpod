@@ -138,7 +138,8 @@ class LightTTSEngine:
 
 
     def synthesize(
-        self, text: str, voice_id: str, lang: str = "en", stream: bool = True
+        self, text: str, voice_id: str, lang: str = "en", stream: bool = True,
+        speed: float = 1.0, pitch: float = 1.0, emotion: str = "neutral"
     ) -> Generator[bytes, None, None]:
         """Generate audio chunks for the given text and voice."""
         if not self._model:
