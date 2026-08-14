@@ -136,7 +136,6 @@ class LightTTSEngine:
 
         return voices
 
-
     def synthesize(
         self, text: str, voice_id: str, lang: str = "en", stream: bool = True,
         speed: float = 1.0, pitch: float = 1.0, emotion: str = "neutral"
@@ -144,27 +143,34 @@ class LightTTSEngine:
         """Generate audio chunks for the given text and voice."""
         if not self._model:
             raise SynthesisError("Model not loaded")
+        
+        # Pre-check: Verificar si es una voz clonada y si los archivos existen
+        is_cloned = False
+        try:
+            meta = self._voice_manager.load_voice_metadata(voice_id)
+            if meta and meta.get("is_cloned"):
+                is_cloned = True
+                ref_audio_path = self.voices_path / f"{voice_id}.wav"
+                if not ref_audio_path.exists():
+                    raise VoiceNotFoundError(f"Reference audio for voice '{voice_id}' not found")
+        except FileNotFoundError:
+            pass  # Los metadatos no existen, tratar como voz base
+        except VoiceNotFoundError:
+            raise  # ¡Dejar que esta excepción suba a la API para devolver 404!
+        except Exception:
+            pass  # Cualquier otro error, tratar como voz base
 
         try:
-            # Check if it's a cloned voice
-            is_cloned = False
-            try:
-                meta = self._voice_manager.load_voice_metadata(voice_id)
-                if meta and meta.get("is_cloned"):
-                    is_cloned = True
-            except Exception:
-                pass  # Not a cloned voice, will use base synthesis
-
             if is_cloned:
                 yield from self._synthesize_cloned(text, voice_id, stream)
             else:
-                # Resolve simple alias to actual CosyVoice speaker ID
+                # Resolver alias simple al ID real del hablante de CosyVoice
                 actual_spk_id = VOICE_ALIAS_MAP.get(voice_id, voice_id)
                 yield from self._synthesize_base(text, actual_spk_id, stream)
-
+        except VoiceNotFoundError:
+            raise  # ¡Dejar que esta excepción suba a la API para devolver 404!
         except Exception as e:
             raise SynthesisError(f"Synthesis failed: {e}") from e
-
 
     def _synthesize_base(
         self, text: str, spk_id: str, stream: bool
@@ -206,45 +212,33 @@ class LightTTSEngine:
         self, text: str, voice_id: str, stream: bool
     ) -> Generator[bytes, None, None]:
         """Synthesize using a cloned voice."""
-        metadata = self._voice_manager.load_voice_metadata(voice_id)
+        try:
+            metadata = self._voice_manager.load_voice_metadata(voice_id)
+        except FileNotFoundError:
+            raise VoiceNotFoundError(f"Voice metadata for '{voice_id}' not found")
+            
         ref_audio_path = self.voices_path / f"{voice_id}.wav"
-        
         if not ref_audio_path.exists():
             raise VoiceNotFoundError(f"Reference audio for voice '{voice_id}' not found")
 
         try:
+            ref_speech, sr = torchaudio.load(str(ref_audio_path))
+            if sr != 16000:
+                resampler = torchaudio.transforms.Resample(sr, 16000)
+                ref_speech = resampler(ref_speech)
+            ref_speech = ref_speech.to(self.device)
             prompt_text = metadata.get("transcript", "")
             
-            # CRÍTICO: CosyVoice v1 SFT REQUIERE usar load_wav para procesar el audio de referencia
-            # Esta función interna hace la normalización exacta que el modelo espera
-            # Argumentos: ruta_archivo, sample_rate_objetivo (16000 para zero-shot)
-            ref_speech = self._load_wav(str(ref_audio_path), 16000)
-            
-            # Mover al dispositivo correcto (CPU o CUDA)
-            ref_speech = ref_speech.to(self.device)
-            
-            # LLAMADA CORRECTA PARA COSYVOICE V1: Solo argumentos posicionales
-            # Orden: (texto_a_generar, texto_referencia, tensor_audio_referencia, stream)
             output_generator = self._model.inference_zero_shot(
-                text, 
-                prompt_text, 
-                ref_speech, 
-                False  # stream=False para obtener todo el audio junto
+                text, prompt_text, ref_speech, stream=False
             )
             
-            # Procesar la salida
             for out_dict in output_generator:
                 speech = out_dict['tts_speech']
-                
-                # Asegurar formato [canales, muestras]
                 if speech.dim() == 3:
                     speech = speech.squeeze(0)
-                if speech.dim() == 1:
-                    speech = speech.unsqueeze(0)
-                
                 with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
                     tmp_path = tmp_file.name
-                
                 try:
                     torchaudio.save(tmp_path, speech.cpu(), 24000, format="wav")
                     with open(tmp_path, "rb") as f:
@@ -252,7 +246,6 @@ class LightTTSEngine:
                 finally:
                     if os.path.exists(tmp_path):
                         os.remove(tmp_path)
-                
                 if stream:
                     chunk_size = 4096
                     for i in range(0, len(audio_bytes), chunk_size):
@@ -260,10 +253,10 @@ class LightTTSEngine:
                 else:
                     yield audio_bytes
                 break
-
+        except VoiceNotFoundError:
+            raise  # ¡Dejar que esta excepción suba a la API!
         except Exception as e:
             raise SynthesisError(f"Cloned voice synthesis failed: {e}") from e
-
 
     def clone_voice(
         self, audio_path: str, transcript: str, voice_name: str, language: str = "en"
