@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from api.dependencies import get_lighttts_engine, get_settings
-from api.routes import tts, clone, voices
+from api.routes import tts, clone, voices, info
 from core.exceptions import (
     VoiceNotFoundError,
     ModelLoadError,
@@ -119,3 +119,5 @@ async def audio_too_short_handler(request: Request, exc: AudioTooShortError):
 app.include_router(voices.router, prefix="/api/v1", tags=["voices"])
 app.include_router(tts.router, prefix="/api/v1", tags=["tts"])
 app.include_router(clone.router, prefix="/api/v1", tags=["clone"])
+app.include_router(info.router, prefix="/api/v1", tags=["info"])
+

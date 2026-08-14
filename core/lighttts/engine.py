@@ -1,6 +1,7 @@
 """LightTTSEngine - Wrapper for CosyVoice 2 model."""
 
 import os
+import re
 import uuid
 import shutil
 import tempfile
@@ -28,6 +29,19 @@ VOICE_ALIAS_MAP = {
     "en_male": "英文男",
     "ja_female": "日本語女",
     "ko_female": "한국어女",
+}
+
+# Emotion presets: tag -> (speed, pitch)
+EMOTION_PRESETS = {
+    "<happy>":      {"speed": 1.10, "pitch": 1.10},
+    "<sad>":        {"speed": 0.90, "pitch": 0.92},
+    "<serious>":    {"speed": 0.95, "pitch": 0.95},
+    "<whisper>":    {"speed": 0.85, "pitch": 0.88},
+    "<angry>":      {"speed": 1.15, "pitch": 1.15},
+    "<narrative>":  {"speed": 0.95, "pitch": 1.00},
+    "<slow>":       {"speed": 0.80, "pitch": 1.00},
+    "<fast>":       {"speed": 1.20, "pitch": 1.00},
+    "<neutral>":    {"speed": 1.00, "pitch": 1.00},
 }
 
 
@@ -62,17 +76,13 @@ class LightTTSEngine:
     def _load_model(self) -> None:
         """Load the CosyVoice 2 model."""
         try:
-            # Import CosyVoice 2 - this will fail if not installed
             from cosyvoice.utils.file_utils import load_wav
 
-            # Store imports for later use
             self._CosyVoice2 = CosyVoice2
             self._load_wav = load_wav
 
-            # Model path should contain the CosyVoice 2 weights
             model_dir = self.models_path / "CosyVoice2-0.5B"
             if not model_dir.exists():
-                # Try alternative naming
                 model_dirs = list(self.models_path.glob("CosyVoice*"))
                 if model_dirs:
                     model_dir = model_dirs[0]
@@ -83,7 +93,6 @@ class LightTTSEngine:
                     )
 
             print(f"Loading CosyVoice 2 model from {model_dir} on {self.device}...")
-            # Detect model version based on yaml file
             if (model_dir / "cosyvoice.yaml").exists():
                 print("✅ Detected CosyVoice v1 (SFT) model")
                 self._model = CosyVoice(str(model_dir), load_jit=False, fp16=(self.device == "cuda"))
@@ -104,7 +113,6 @@ class LightTTSEngine:
         """Scan and return all available voices (base and cloned)."""
         voices = []
 
-        # Add cloned voices from voice manager
         cloned_voices = self._voice_manager.list_voices()
         for voice in cloned_voices:
             voices.append({
@@ -115,7 +123,6 @@ class LightTTSEngine:
                 "sample_rate": voice.get("sample_rate", 24000),
             })
 
-        # Add base voices with simple, easy-to-use aliases
         known_base_voices = [
             ("zh_female", "zh", "Base Chinese Female"),
             ("zh_male", "zh", "Base Chinese Male"),
@@ -136,54 +143,121 @@ class LightTTSEngine:
 
         return voices
 
+    def _parse_emotion_tags(self, text: str) -> List[Dict[str, Any]]:
+        """Parse emotion tags from text and return segments with their presets."""
+        segments = []
+        current_emotion = "<neutral>"
+        
+        pattern = r'(<(?:' + '|'.join(tag.strip('<>') for tag in EMOTION_PRESETS.keys()) + r')>)'
+        parts = re.split(pattern, text)
+        
+        for part in parts:
+            if not part.strip():
+                continue
+            
+            if part in EMOTION_PRESETS:
+                current_emotion = part
+            else:
+                preset = EMOTION_PRESETS.get(current_emotion, EMOTION_PRESETS["<neutral>"])
+                segments.append({
+                    "text": part.strip(),
+                    "speed": preset["speed"],
+                    "pitch": preset["pitch"],
+                })
+        
+        return segments if segments else [{"text": text, "speed": 1.0, "pitch": 1.0}]
+
+    def _apply_pitch_shift(self, waveform: torch.Tensor, pitch_factor: float) -> torch.Tensor:
+        """Apply pitch shifting to audio waveform."""
+        if pitch_factor == 1.0:
+            return waveform
+        
+        effects = [
+            ["pitch", str(pitch_factor * 100)],
+            ["rate", "24000"],
+        ]
+        
+        try:
+            shifted, _ = torchaudio.sox_effects.apply_effects_tensor(
+                waveform, 24000, effects
+            )
+            return shifted
+        except Exception:
+            return waveform
+
     def synthesize(
         self, text: str, voice_id: str, lang: str = "en", stream: bool = True,
-        speed: float = 1.0, pitch: float = 1.0, emotion: str = "neutral"
+        speed: float = 1.0, pitch: float = 1.0, emotion: str = "neutral",
+        emotion_tags: bool = False
     ) -> Generator[bytes, None, None]:
         """Generate audio chunks for the given text and voice."""
         if not self._model:
             raise SynthesisError("Model not loaded")
         
-        # Pre-check: Verificar si es una voz clonada y si los archivos existen
-        is_cloned = False
         try:
-            meta = self._voice_manager.load_voice_metadata(voice_id)
-            if meta and meta.get("is_cloned"):
-                is_cloned = True
-                ref_audio_path = self.voices_path / f"{voice_id}.wav"
-                if not ref_audio_path.exists():
-                    raise VoiceNotFoundError(f"Reference audio for voice '{voice_id}' not found")
-        except FileNotFoundError:
-            pass  # Los metadatos no existen, tratar como voz base
-        except VoiceNotFoundError:
-            raise  # ¡Dejar que esta excepción suba a la API para devolver 404!
-        except Exception:
-            pass  # Cualquier otro error, tratar como voz base
+            is_cloned = False
+            try:
+                meta = self._voice_manager.load_voice_metadata(voice_id)
+                if meta and meta.get("is_cloned"):
+                    is_cloned = True
+                    ref_audio_path = self.voices_path / f"{voice_id}.wav"
+                    if not ref_audio_path.exists():
+                        raise VoiceNotFoundError(f"Reference audio for voice '{voice_id}' not found")
+            except FileNotFoundError:
+                pass
+            except VoiceNotFoundError:
+                raise
+            except Exception:
+                pass
 
-        try:
-            if is_cloned:
-                yield from self._synthesize_cloned(text, voice_id, stream)
+            if emotion_tags:
+                segments = self._parse_emotion_tags(text)
             else:
-                # Resolver alias simple al ID real del hablante de CosyVoice
-                actual_spk_id = VOICE_ALIAS_MAP.get(voice_id, voice_id)
-                yield from self._synthesize_base(text, actual_spk_id, stream)
+                segments = [{"text": text, "speed": speed, "pitch": pitch}]
+            
+            for segment in segments:
+                seg_text = segment["text"]
+                seg_speed = segment["speed"]
+                seg_pitch = segment["pitch"]
+                
+                if not seg_text:
+                    continue
+                
+                if is_cloned:
+                    audio_bytes = self._synthesize_cloned_segment(seg_text, voice_id, seg_speed, seg_pitch)
+                else:
+                    actual_spk_id = VOICE_ALIAS_MAP.get(voice_id, voice_id)
+                    audio_bytes = self._synthesize_base_segment(seg_text, actual_spk_id, seg_speed, seg_pitch)
+                
+                if stream:
+                    chunk_size = 4096
+                    for i in range(0, len(audio_bytes), chunk_size):
+                        yield audio_bytes[i:i + chunk_size]
+                else:
+                    yield audio_bytes
+                    
         except VoiceNotFoundError:
-            raise  # ¡Dejar que esta excepción suba a la API para devolver 404!
+            raise
         except Exception as e:
             raise SynthesisError(f"Synthesis failed: {e}") from e
 
-    def _synthesize_base(
-        self, text: str, spk_id: str, stream: bool
-    ) -> Generator[bytes, None, None]:
-        """Synthesize using a base (pre-trained) speaker."""
+    def _synthesize_base_segment(
+        self, text: str, spk_id: str, speed: float, pitch: float
+    ) -> bytes:
+        """Synthesize a single segment using base voice and return bytes."""
         try:
             output_generator = self._model.inference_sft(text, spk_id, stream=False)
             
             for out_dict in output_generator:
                 speech = out_dict['tts_speech']
-                
                 if speech.dim() == 3:
                     speech = speech.squeeze(0)
+                
+                if speed != 1.0:
+                    speech = torchaudio.functional.resample(speech, int(24000 * speed), 24000)
+                
+                if pitch != 1.0:
+                    speech = self._apply_pitch_shift(speech, pitch)
                 
                 with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
                     tmp_path = tmp_file.name
@@ -196,21 +270,16 @@ class LightTTSEngine:
                     if os.path.exists(tmp_path):
                         os.remove(tmp_path)
                 
-                if stream:
-                    chunk_size = 4096
-                    for i in range(0, len(audio_bytes), chunk_size):
-                        yield audio_bytes[i:i + chunk_size]
-                else:
-                    yield audio_bytes
-                break
-
+                return audio_bytes
+            
+            return b""
         except Exception as e:
             raise SynthesisError(f"Base voice synthesis failed: {e}") from e
 
-    def _synthesize_cloned(
-        self, text: str, voice_id: str, stream: bool
-    ) -> Generator[bytes, None, None]:
-        """Synthesize using a cloned voice."""
+    def _synthesize_cloned_segment(
+        self, text: str, voice_id: str, speed: float, pitch: float
+    ) -> bytes:
+        """Synthesize a single segment using cloned voice and return bytes."""
         metadata = self._voice_manager.load_voice_metadata(voice_id)
         ref_audio_path = self.voices_path / f"{voice_id}.wav"
         
@@ -220,27 +289,27 @@ class LightTTSEngine:
         try:
             prompt_text = metadata.get("transcript", "")
             
-            # ✅ SOLUCIÓN CLAVE: Pasar la RUTA DEL ARCHIVO (string), NO el tensor.
-            # CosyVoice internamente llamará a load_wav(ruta, 16000) para procesarlo.
-            # Si le pasamos un tensor, falla con "Invalid file: tensor(...)".
             output_generator = self._model.inference_zero_shot(
                 text, prompt_text, str(ref_audio_path), stream=False
             )
             
             for out_dict in output_generator:
                 speech = out_dict['tts_speech']
-                
-                # Asegurar formato correcto [canales, muestras]
                 if speech.dim() == 3:
                     speech = speech.squeeze(0)
                 if speech.dim() == 1:
                     speech = speech.unsqueeze(0)
                 
+                if speed != 1.0:
+                    speech = torchaudio.functional.resample(speech, int(24000 * speed), 24000)
+                
+                if pitch != 1.0:
+                    speech = self._apply_pitch_shift(speech, pitch)
+                
                 with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
                     tmp_path = tmp_file.name
                 
                 try:
-                    # ✅ ORDEN CORRECTO: uri (string), src (tensor), sample_rate, format
                     torchaudio.save(tmp_path, speech.cpu(), 24000, format="wav")
                     with open(tmp_path, "rb") as f:
                         audio_bytes = f.read()
@@ -248,14 +317,9 @@ class LightTTSEngine:
                     if os.path.exists(tmp_path):
                         os.remove(tmp_path)
                 
-                if stream:
-                    chunk_size = 4096
-                    for i in range(0, len(audio_bytes), chunk_size):
-                        yield audio_bytes[i:i + chunk_size]
-                else:
-                    yield audio_bytes
-                break
-
+                return audio_bytes
+            
+            return b""
         except VoiceNotFoundError:
             raise
         except Exception as e:
@@ -264,21 +328,13 @@ class LightTTSEngine:
     def clone_voice(
         self, audio_path: str, transcript: str, voice_name: str, language: str = "en"
     ) -> str:
-        """Clone a voice from reference audio and transcript.
-        Args:
-            audio_path: Path to reference audio file.
-            transcript: Transcript of the reference audio.
-            voice_name: Name for the new voice (will be used as voice_id).
-            language: Language code.
-        Returns:
-            voice_id (same as voice_name).
-        """
+        """Clone a voice from reference audio and transcript."""
         if not self._model:
             raise CloningError("Model not loaded")
         audio_path = Path(audio_path)
         if not audio_path.exists():
             raise CloningError(f"Reference audio not found: {audio_path}")
-        # Validate audio duration (CosyVoice needs at least a few seconds)
+        
         try:
             info = torchaudio.info(str(audio_path))
             duration = info.num_frames / info.sample_rate
@@ -293,17 +349,13 @@ class LightTTSEngine:
             raise
         except Exception as e:
             raise CloningError(f"Failed to validate audio: {e}") from e
-        # Usar el nombre como voice_id (no UUID)
-        voice_id = voice_name
-        # Validar que el nombre no contenga caracteres inválidos para archivos
-        import re
-        voice_id_clean = re.sub(r'[^\w\-]', '_', voice_id)
-        voice_id = voice_id_clean[:32]  # Limitar a 32 caracteres para evitar errores en sistemas de archivos
         
-        # Copiar audio de referencia a la carpeta de voces
+        voice_id = voice_name
+        voice_id_clean = re.sub(r'[^\w\-]', '_', voice_id)
+        voice_id = voice_id_clean[:32]
+        
         dest_audio = self.voices_path / f"{voice_id}.wav"
         try:
-            # Resample a 24kHz si es necesario
             waveform, sr = torchaudio.load(str(audio_path))
             if sr != 24000:
                 resampler = torchaudio.transforms.Resample(sr, 24000)
@@ -311,16 +363,16 @@ class LightTTSEngine:
             torchaudio.save(str(dest_audio), waveform, 24000)
         except Exception as e:
             raise CloningError(f"Failed to process reference audio: {e}") from e
-        # Guardar metadatos
+        
         metadata = {
             "voice_id": voice_id,
             "name": voice_name,
             "language": language,
-            "gender": "unknown",  # Podrías detectarlo o dejarlo como usuario
+            "gender": "unknown",
             "is_cloned": True,
             "sample_rate": 24000,
             "transcript": transcript,
-            "created_at": str(torch.tensor(0).numpy()),  # Placeholder
+            "created_at": str(torch.tensor(0).numpy()),
         }
         self._voice_manager.save_voice_metadata(voice_id, metadata)
         return voice_id

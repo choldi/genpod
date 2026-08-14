@@ -10,7 +10,7 @@ class VoiceInfo(BaseModel):
     language: str = Field(default="en", description="Language code")
     description: Optional[str] = Field(default=None, description="Voice description")
     metadata: Optional[Dict[str, Any]] = Field(default=None, description="Additional metadata")
-    is_cloned: bool = False  # ← AÑADE ESTA LÍNEA
+    is_cloned: bool = False
 
 
 class VoiceListResponse(BaseModel):
@@ -25,7 +25,11 @@ class TTSRequest(BaseModel):
     voice_id: str = Field(..., description="Voice identifier to use")
     language: str = Field(default="en", description="Language code")
     stream: bool = Field(default=True, description="Whether to stream the audio")
-    mode: str = "studio"  # "fast" for chat/whatsapp, "studio" for podcasts
+    mode: str = Field(default="studio", description="Synthesis mode: 'fast' or 'studio'")
+    speed: Optional[float] = Field(default=None, ge=0.5, le=2.0, description="Speed multiplier (0.5-2.0)")
+    pitch: Optional[float] = Field(default=None, ge=0.5, le=2.0, description="Pitch multiplier (0.5-2.0)")
+    emotion: str = Field(default="neutral", description="Emotion (reserved for future use)")
+    emotion_tags: bool = Field(default=False, description="Enable emotion tag parsing in text")
 
 
 class TTSResponse(BaseModel):
@@ -62,3 +66,15 @@ class HealthResponse(BaseModel):
     version: str = Field(..., description="API version")
     model_loaded: bool = Field(default=False, description="Whether the model is loaded")
     device: str = Field(..., description="Device being used")
+
+
+class APIInfoResponse(BaseModel):
+    """Response model for API info/help/usage endpoint."""
+    name: str = Field(..., description="Service name")
+    version: str = Field(..., description="API version")
+    description: str = Field(..., description="Service description")
+    endpoints: Dict[str, str] = Field(default_factory=dict, description="Available endpoints with descriptions")
+    emotion_tags: List[str] = Field(default_factory=list, description="Available emotion tags for TTS")
+    supported_languages: List[str] = Field(default_factory=list, description="Supported language codes")
+    readme: str = Field(default="", description="Full README documentation in Markdown")
+

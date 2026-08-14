@@ -28,6 +28,7 @@ async def synthesize(
         speed = getattr(request, "speed", None)
         pitch = getattr(request, "pitch", None)
         emotion = getattr(request, "emotion", "neutral")
+        emotion_tags = getattr(request, "emotion_tags", False)
         
         # Determine language safely (prioritize 'lang', fallback to 'language')
         lang_val = getattr(request, "lang", getattr(request, "language", "en"))
@@ -56,13 +57,14 @@ async def synthesize(
                 try:
                     logger.debug(f"Streaming synthesis: '{input_text[:50]}...'")
                     for chunk in engine.synthesize(
-                        text=input_text,  # Usamos la variable local limpia
+                        text=input_text,
                         voice_id=request.voice_id,
                         lang=lang_val,
                         speed=speed,
                         pitch=pitch,
                         emotion=emotion,
                         stream=True,
+                        emotion_tags=emotion_tags,
                     ):
                         yield chunk
                 except Exception as e:
@@ -80,13 +82,14 @@ async def synthesize(
             logger.debug(f"Full synthesis: '{input_text[:50]}...'")
             audio_data = b""
             for chunk in engine.synthesize(
-                text=input_text,  # Usamos la variable local limpia
+                text=input_text,
                 voice_id=request.voice_id,
                 lang=lang_val,
                 speed=speed,
                 pitch=pitch,
                 emotion=emotion,
                 stream=False,
+                emotion_tags=emotion_tags,
             ):
                 audio_data += chunk
 
@@ -104,3 +107,4 @@ async def synthesize(
     except Exception as e:
         logger.error(f"Unexpected error in TTS: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
