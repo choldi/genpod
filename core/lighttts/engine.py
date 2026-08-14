@@ -215,20 +215,21 @@ class LightTTSEngine:
         try:
             prompt_text = metadata.get("transcript", "")
             
-            # CRÍTICO: CosyVoice v1 SFT requiere usar load_wav para procesar el audio de referencia
-            # Esto devuelve un tensor ya formateado correctamente para el modelo
+            # CRÍTICO: CosyVoice v1 SFT REQUIERE usar load_wav para procesar el audio de referencia
+            # Esta función interna hace la normalización exacta que el modelo espera
+            # Argumentos: ruta_archivo, sample_rate_objetivo (16000 para zero-shot)
             ref_speech = self._load_wav(str(ref_audio_path), 16000)
             
-            # Mover al dispositivo correcto
+            # Mover al dispositivo correcto (CPU o CUDA)
             ref_speech = ref_speech.to(self.device)
             
-            # LLAMADA CORRECTA PARA COSYVOICE V1: Argumentos posicionales
-            # inference_zero_shot(text, prompt_text, prompt_speech_tensor, stream)
+            # LLAMADA CORRECTA PARA COSYVOICE V1: Solo argumentos posicionales
+            # Orden: (texto_a_generar, texto_referencia, tensor_audio_referencia, stream)
             output_generator = self._model.inference_zero_shot(
                 text, 
                 prompt_text, 
                 ref_speech, 
-                False  # stream=False para obtener todo el audio de una vez
+                False  # stream=False para obtener todo el audio junto
             )
             
             # Procesar la salida
@@ -268,23 +269,19 @@ class LightTTSEngine:
         self, audio_path: str, transcript: str, voice_name: str, language: str = "en"
     ) -> str:
         """Clone a voice from reference audio and transcript.
-
         Args:
             audio_path: Path to reference audio file.
             transcript: Transcript of the reference audio.
-            voice_name: Name for the new voice.
+            voice_name: Name for the new voice (will be used as voice_id).
             language: Language code.
-
         Returns:
-            New voice_id.
+            voice_id (same as voice_name).
         """
         if not self._model:
             raise CloningError("Model not loaded")
-
         audio_path = Path(audio_path)
         if not audio_path.exists():
             raise CloningError(f"Reference audio not found: {audio_path}")
-
         # Validate audio duration (CosyVoice needs at least a few seconds)
         try:
             info = torchaudio.info(str(audio_path))
@@ -300,14 +297,17 @@ class LightTTSEngine:
             raise
         except Exception as e:
             raise CloningError(f"Failed to validate audio: {e}") from e
-
-        # Generate unique voice_id
-        voice_id = f"cloned_{uuid.uuid4().hex[:12]}"
+        # Usar el nombre como voice_id (no UUID)
+        voice_id = voice_name
+        # Validar que el nombre no contenga caracteres inválidos para archivos
+        import re
+        voice_id_clean = re.sub(r'[^\w\-]', '_', voice_id)
+        voice_id = voice_id_clean[:32]  # Limitar a 32 caracteres para evitar errores en sistemas de archivos
         
-        # Copy reference audio to voices directory
+        # Copiar audio de referencia a la carpeta de voces
         dest_audio = self.voices_path / f"{voice_id}.wav"
         try:
-            # Resample to 24kHz if needed
+            # Resample a 24kHz si es necesario
             waveform, sr = torchaudio.load(str(audio_path))
             if sr != 24000:
                 resampler = torchaudio.transforms.Resample(sr, 24000)
@@ -315,19 +315,17 @@ class LightTTSEngine:
             torchaudio.save(str(dest_audio), waveform, 24000)
         except Exception as e:
             raise CloningError(f"Failed to process reference audio: {e}") from e
-
-        # Save metadata
+        # Guardar metadatos
         metadata = {
             "voice_id": voice_id,
             "name": voice_name,
             "language": language,
-            "gender": "unknown",  # Could be detected or user-provided
+            "gender": "unknown",  # Podrías detectarlo o dejarlo como usuario
             "is_cloned": True,
             "sample_rate": 24000,
             "transcript": transcript,
-            "created_at": str(torch.tensor(0).numpy()),  # placeholder for timestamp
+            "created_at": str(torch.tensor(0).numpy()),  # Placeholder
         }
-        
         self._voice_manager.save_voice_metadata(voice_id, metadata)
-        
         return voice_id
+
