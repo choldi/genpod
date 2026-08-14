@@ -8,7 +8,6 @@ from core.lighttts.engine import LightTTSEngine
 
 router = APIRouter()
 
-
 @router.get("/voices", response_model=VoiceListResponse)
 async def list_voices(engine: LightTTSEngine = Depends(get_lighttts_engine)):
     """List all available voices."""
@@ -21,6 +20,7 @@ async def list_voices(engine: LightTTSEngine = Depends(get_lighttts_engine)):
                 language=v.get("language", "en"),
                 description=v.get("description"),
                 metadata=v.get("metadata"),
+                is_cloned=v.get("is_cloned", False),  # ← AÑADE ESTA LÍNEA
             )
             for v in voices_data
         ]

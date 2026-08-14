@@ -3,7 +3,6 @@
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field
 
-
 class VoiceInfo(BaseModel):
     """Information about a single voice."""
     voice_id: str = Field(..., description="Unique identifier for the voice")
@@ -11,6 +10,7 @@ class VoiceInfo(BaseModel):
     language: str = Field(default="en", description="Language code")
     description: Optional[str] = Field(default=None, description="Voice description")
     metadata: Optional[Dict[str, Any]] = Field(default=None, description="Additional metadata")
+    is_cloned: bool = False  # ← AÑADE ESTA LÍNEA
 
 
 class VoiceListResponse(BaseModel):
