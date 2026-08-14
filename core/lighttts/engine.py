@@ -207,45 +207,47 @@ class LightTTSEngine:
         except Exception as e:
             raise SynthesisError(f"Base voice synthesis failed: {e}") from e
 
-
     def _synthesize_cloned(
         self, text: str, voice_id: str, stream: bool
     ) -> Generator[bytes, None, None]:
         """Synthesize using a cloned voice."""
-        try:
-            metadata = self._voice_manager.load_voice_metadata(voice_id)
-        except FileNotFoundError:
-            raise VoiceNotFoundError(f"Voice metadata for '{voice_id}' not found")
-            
+        metadata = self._voice_manager.load_voice_metadata(voice_id)
         ref_audio_path = self.voices_path / f"{voice_id}.wav"
+        
         if not ref_audio_path.exists():
             raise VoiceNotFoundError(f"Reference audio for voice '{voice_id}' not found")
 
         try:
-            ref_speech, sr = torchaudio.load(str(ref_audio_path))
-            if sr != 16000:
-                resampler = torchaudio.transforms.Resample(sr, 16000)
-                ref_speech = resampler(ref_speech)
-            ref_speech = ref_speech.to(self.device)
             prompt_text = metadata.get("transcript", "")
             
+            # ✅ SOLUCIÓN CLAVE: Pasar la RUTA DEL ARCHIVO (string), NO el tensor.
+            # CosyVoice internamente llamará a load_wav(ruta, 16000) para procesarlo.
+            # Si le pasamos un tensor, falla con "Invalid file: tensor(...)".
             output_generator = self._model.inference_zero_shot(
-                text, prompt_text, ref_speech, stream=False
+                text, prompt_text, str(ref_audio_path), stream=False
             )
             
             for out_dict in output_generator:
                 speech = out_dict['tts_speech']
+                
+                # Asegurar formato correcto [canales, muestras]
                 if speech.dim() == 3:
                     speech = speech.squeeze(0)
+                if speech.dim() == 1:
+                    speech = speech.unsqueeze(0)
+                
                 with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
                     tmp_path = tmp_file.name
+                
                 try:
+                    # ✅ ORDEN CORRECTO: uri (string), src (tensor), sample_rate, format
                     torchaudio.save(tmp_path, speech.cpu(), 24000, format="wav")
                     with open(tmp_path, "rb") as f:
                         audio_bytes = f.read()
                 finally:
                     if os.path.exists(tmp_path):
                         os.remove(tmp_path)
+                
                 if stream:
                     chunk_size = 4096
                     for i in range(0, len(audio_bytes), chunk_size):
@@ -253,8 +255,9 @@ class LightTTSEngine:
                 else:
                     yield audio_bytes
                 break
+
         except VoiceNotFoundError:
-            raise  # ¡Dejar que esta excepción suba a la API!
+            raise
         except Exception as e:
             raise SynthesisError(f"Cloned voice synthesis failed: {e}") from e
 
