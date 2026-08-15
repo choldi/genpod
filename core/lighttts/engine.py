@@ -224,7 +224,7 @@ class LightTTSEngine:
                     continue
                 
                 if is_cloned:
-                    audio_bytes = self._synthesize_cloned_segment(seg_text, voice_id, seg_speed, seg_pitch)
+                    audio_bytes = self._synthesize_cloned_segment(seg_text, voice_id, seg_speed, seg_pitch, lang)
                 else:
                     actual_spk_id = VOICE_ALIAS_MAP.get(voice_id, voice_id)
                     audio_bytes = self._synthesize_base_segment(seg_text, actual_spk_id, seg_speed, seg_pitch)
@@ -276,54 +276,61 @@ class LightTTSEngine:
         except Exception as e:
             raise SynthesisError(f"Base voice synthesis failed: {e}") from e
 
-    def _synthesize_cloned_segment(
-        self, text: str, voice_id: str, speed: float, pitch: float
-    ) -> bytes:
-        """Synthesize a single segment using cloned voice and return bytes."""
-        metadata = self._voice_manager.load_voice_metadata(voice_id)
-        ref_audio_path = self.voices_path / f"{voice_id}.wav"
-        
-        if not ref_audio_path.exists():
-            raise VoiceNotFoundError(f"Reference audio for voice '{voice_id}' not found")
+def _synthesize_cloned_segment(
+    self, text: str, voice_id: str, speed: float, pitch: float, language: str = "es"
+) -> bytes:
+    """Synthesize a single segment using cloned voice and return bytes."""
+    metadata = self._voice_manager.load_voice_metadata(voice_id)
+    ref_audio_path = self.voices_path / f"{voice_id}.wav"
+    
+    if not ref_audio_path.exists():
+        raise VoiceNotFoundError(f"Reference audio for voice '{voice_id}' not found")
 
+    try:
+        prompt_text = metadata.get("transcript", "")
+        
+        # Pasar el idioma al modelo si lo soporta
         try:
-            prompt_text = metadata.get("transcript", "")
-            
+            output_generator = self._model.inference_zero_shot(
+                text, prompt_text, str(ref_audio_path), stream=False, language=language
+            )
+        except TypeError:
+            # Si el modelo no soporta el parámetro language, usar sin él
             output_generator = self._model.inference_zero_shot(
                 text, prompt_text, str(ref_audio_path), stream=False
             )
+        
+        for out_dict in output_generator:
+            speech = out_dict['tts_speech']
+            if speech.dim() == 3:
+                speech = speech.squeeze(0)
+            if speech.dim() == 1:
+                speech = speech.unsqueeze(0)
             
-            for out_dict in output_generator:
-                speech = out_dict['tts_speech']
-                if speech.dim() == 3:
-                    speech = speech.squeeze(0)
-                if speech.dim() == 1:
-                    speech = speech.unsqueeze(0)
-                
-                if speed != 1.0:
-                    speech = torchaudio.functional.resample(speech, int(24000 * speed), 24000)
-                
-                if pitch != 1.0:
-                    speech = self._apply_pitch_shift(speech, pitch)
-                
-                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
-                    tmp_path = tmp_file.name
-                
-                try:
-                    torchaudio.save(tmp_path, speech.cpu(), 24000, format="wav")
-                    with open(tmp_path, "rb") as f:
-                        audio_bytes = f.read()
-                finally:
-                    if os.path.exists(tmp_path):
-                        os.remove(tmp_path)
-                
-                return audio_bytes
+            if speed != 1.0:
+                speech = torchaudio.functional.resample(speech, int(24000 * speed), 24000)
             
-            return b""
-        except VoiceNotFoundError:
-            raise
-        except Exception as e:
-            raise SynthesisError(f"Cloned voice synthesis failed: {e}") from e
+            if pitch != 1.0:
+                speech = self._apply_pitch_shift(speech, pitch)
+            
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
+                tmp_path = tmp_file.name
+            
+            try:
+                torchaudio.save(tmp_path, speech.cpu(), 24000, format="wav")
+                with open(tmp_path, "rb") as f:
+                    audio_bytes = f.read()
+            finally:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+            
+            return audio_bytes
+        
+        return b""
+    except VoiceNotFoundError:
+        raise
+    except Exception as e:
+        raise SynthesisError(f"Cloned voice synthesis failed: {e}") from e
 
     def clone_voice(
         self, audio_path: str, transcript: str, voice_name: str, language: str = "en"
