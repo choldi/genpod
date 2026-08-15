@@ -49,13 +49,7 @@ class LightTTSEngine:
     """Main wrapper class for CosyVoice 2 operations."""
 
     def __init__(self, models_path: str, voices_path: str, device: str = "cpu"):
-        """Initialize the CosyVoice 2 model.
-
-        Args:
-            models_path: Path to base model weights.
-            voices_path: Path to cloned voice profiles.
-            device: Device to run inference on ('cpu', 'cuda', 'mps').
-        """
+        """Initialize the CosyVoice 2 model."""
         self.models_path = Path(models_path)
         self.voices_path = Path(voices_path)
         self.device = self._resolve_device(device)
@@ -276,113 +270,59 @@ class LightTTSEngine:
         except Exception as e:
             raise SynthesisError(f"Base voice synthesis failed: {e}") from e
 
-def _synthesize_cloned_segment(
-    self, text: str, voice_id: str, speed: float, pitch: float, language: str = "es"
-) -> bytes:
-    """Synthesize a single segment using cloned voice and return bytes."""
-    metadata = self._voice_manager.load_voice_metadata(voice_id)
-    ref_audio_path = self.voices_path / f"{voice_id}.wav"
-    
-    if not ref_audio_path.exists():
-        raise VoiceNotFoundError(f"Reference audio for voice '{voice_id}' not found")
+    def _synthesize_cloned_segment(
+        self, text: str, voice_id: str, speed: float, pitch: float, language: str = "es"
+    ) -> bytes:
+        """Synthesize a single segment using cloned voice and return bytes."""
+        metadata = self._voice_manager.load_voice_metadata(voice_id)
+        ref_audio_path = self.voices_path / f"{voice_id}.wav"
+        
+        if not ref_audio_path.exists():
+            raise VoiceNotFoundError(f"Reference audio for voice '{voice_id}' not found")
 
-    try:
-        prompt_text = metadata.get("transcript", "")
-        
-        # Pasar el idioma al modelo si lo soporta
         try:
-            output_generator = self._model.inference_zero_shot(
-                text, prompt_text, str(ref_audio_path), stream=False, language=language
-            )
-        except TypeError:
-            # Si el modelo no soporta el parámetro language, usar sin él
-            output_generator = self._model.inference_zero_shot(
-                text, prompt_text, str(ref_audio_path), stream=False
-            )
-        
-        for out_dict in output_generator:
-            speech = out_dict['tts_speech']
-            if speech.dim() == 3:
-                speech = speech.squeeze(0)
-            if speech.dim() == 1:
-                speech = speech.unsqueeze(0)
-            
-            if speed != 1.0:
-                speech = torchaudio.functional.resample(speech, int(24000 * speed), 24000)
-            
-            if pitch != 1.0:
-                speech = self._apply_pitch_shift(speech, pitch)
-            
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
-                tmp_path = tmp_file.name
+            prompt_text = metadata.get("transcript", "")
             
             try:
-                torchaudio.save(tmp_path, speech.cpu(), 24000, format="wav")
-                with open(tmp_path, "rb") as f:
-                    audio_bytes = f.read()
-            finally:
-                if os.path.exists(tmp_path):
-                    os.remove(tmp_path)
-            
-            return audio_bytes
-        
-        return b""
-    except VoiceNotFoundError:
-        raise
-    except Exception as e:
-        raise SynthesisError(f"Cloned voice synthesis failed: {e}") from e
-
-    def clone_voice(
-        self, audio_path: str, transcript: str, voice_name: str, language: str = "en"
-    ) -> str:
-        """Clone a voice from reference audio and transcript."""
-        if not self._model:
-            raise CloningError("Model not loaded")
-        audio_path = Path(audio_path)
-        if not audio_path.exists():
-            raise CloningError(f"Reference audio not found: {audio_path}")
-        
-        try:
-            info = torchaudio.info(str(audio_path))
-            duration = info.num_frames / info.sample_rate
-            if duration < 3.0:
-                raise AudioTooShortError(
-                    f"Reference audio too short: {duration:.1f}s. Minimum 3 seconds required."
+                output_generator = self._model.inference_zero_shot(
+                    text, prompt_text, str(ref_audio_path), stream=False, language=language
                 )
-            if duration > 30.0:
-                print(f"Warning: Reference audio is long ({duration:.1f}s). "
-                      "Consider using a shorter clip for better results.")
-        except AudioTooShortError:
+            except TypeError:
+                output_generator = self._model.inference_zero_shot(
+                    text, prompt_text, str(ref_audio_path), stream=False
+                )
+            
+            for out_dict in output_generator:
+                speech = out_dict['tts_speech']
+                if speech.dim() == 3:
+                    speech = speech.squeeze(0)
+                if speech.dim() == 1:
+                    speech = speech.unsqueeze(0)
+                
+                if speed != 1.0:
+                    speech = torchaudio.functional.resample(speech, int(24000 * speed), 24000)
+                
+                if pitch != 1.0:
+                    speech = self._apply_pitch_shift(speech, pitch)
+                
+                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
+                    tmp_path = tmp_file.name
+                
+                try:
+                    torchaudio.save(tmp_path, speech.cpu(), 24000, format="wav")
+                    with open(tmp_path, "rb") as f:
+                        audio_bytes = f.read()
+                finally:
+                    if os.path.exists(tmp_path):
+                        os.remove(tmp_path)
+                
+                return audio_bytes
+            
+            return b""
+        except VoiceNotFoundError:
             raise
         except Exception as e:
-            raise CloningError(f"Failed to validate audio: {e}") from e
-        
-        voice_id = voice_name
-        voice_id_clean = re.sub(r'[^\w\-]', '_', voice_id)
-        voice_id = voice_id_clean[:32]
-        
-        dest_audio = self.voices_path / f"{voice_id}.wav"
-        try:
-            waveform, sr = torchaudio.load(str(audio_path))
-            if sr != 24000:
-                resampler = torchaudio.transforms.Resample(sr, 24000)
-                waveform = resampler(waveform)
-            torchaudio.save(str(dest_audio), waveform, 24000)
-        except Exception as e:
-            raise CloningError(f"Failed to process reference audio: {e}") from e
-        
-        metadata = {
-            "voice_id": voice_id,
-            "name": voice_name,
-            "language": language,
-            "gender": "unknown",
-            "is_cloned": True,
-            "sample_rate": 24000,
-            "transcript": transcript,
-            "created_at": str(torch.tensor(0).numpy()),
-        }
-        self._voice_manager.save_voice_metadata(voice_id, metadata)
-        return voice_id
+            raise SynthesisError(f"Cloned voice synthesis failed: {e}") from e
 
     def clone_voice(
         self, audio_path: str, transcript: str, voice_name: str, language: str = "en"
