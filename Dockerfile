@@ -1,4 +1,4 @@
-<# Usamos una imagen base con CUDA 12.1 y Ubuntu 22.04 (estándar para CosyVoice)
+# Usamos una imagen base con CUDA 12.1 y Ubuntu 22.04 (estándar para CosyVoice)
 FROM nvidia/cuda:12.1.0-cudnn8-devel-ubuntu22.04
 
 # Configuración de entorno
