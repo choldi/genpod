@@ -70,46 +70,50 @@ class LightTTSEngine:
     def _load_model(self) -> None:
         """Load the CosyVoice model (supports v1, v2, and v3)."""
         try:
-            from cosyvoice.cli.cosyvoice import CosyVoice
+            from cosyvoice.cli.cosyvoice import CosyVoice, CosyVoice2, CosyVoice3
             from cosyvoice.utils.file_utils import load_wav
 
             self._load_wav = load_wav
 
-            # Detectar automáticamente la versión del modelo por el nombre del directorio
+            # Detectar automáticamente la versión del modelo por el archivo yaml presente
             model_dir = None
-            for candidate in ["CosyVoice3-0.5B", "CosyVoice2-0.5B", "CosyVoice-300M-SFT"]:
-                if (self.models_path / candidate).exists():
-                    model_dir = self.models_path / candidate
-                    break
-            
-            if not model_dir:
-                raise ModelLoadError(
-                    f"No CosyVoice model found in {self.models_path}. "
-                    "Please download CosyVoice3-0.5B or another supported version."
-                )
+            if (self.models_path / "CosyVoice3-0.5B" / "cosyvoice3.yaml").exists():
+                model_dir = self.models_path / "CosyVoice3-0.5B"
+            elif (self.models_path / "CosyVoice2-0.5B" / "cosyvoice2.yaml").exists():
+                model_dir = self.models_path / "CosyVoice2-0.5B"
+            elif (self.models_path / "CosyVoice-300M-SFT" / "cosyvoice.yaml").exists():
+                model_dir = self.models_path / "CosyVoice-300M-SFT"
+            else:
+                # Fallback: buscar cualquier carpeta que empiece por CosyVoice
+                model_dirs = list(self.models_path.glob("CosyVoice*"))
+                if model_dirs:
+                    model_dir = model_dirs[0]
+                else:
+                    raise ModelLoadError(
+                        f"No CosyVoice model found in {self.models_path}. "
+                        "Please download the model weights first."
+                    )
 
             print(f"Loading model from {model_dir} on {self.device}...")
             
-            # CosyVoice 3 y 2 comparten la misma interfaz de inicialización en la librería actual
-            # pero podemos registrar la versión para logs
-            if "CosyVoice3" in model_dir.name:
+            # Inicializar la clase correcta según la versión detectada
+            if (model_dir / "cosyvoice3.yaml").exists():
                 print("✅ Detected CosyVoice 3 model (Optimized for multilingual in-the-wild synthesis)")
-                self._model_version = "v3"
-            elif "CosyVoice2" in model_dir.name:
+                # CosyVoice3 no usa el parámetro load_jit
+                self._model = CosyVoice3(str(model_dir), fp16=(self.device == "cuda"))
+            elif (model_dir / "cosyvoice2.yaml").exists():
                 print("✅ Detected CosyVoice 2 model")
-                self._model_version = "v2"
+                self._model = CosyVoice2(str(model_dir), load_jit=False, fp16=(self.device == "cuda"))
             else:
                 print("✅ Detected CosyVoice v1 (SFT) model")
-                self._model_version = "v1"
-
-            # Inicializar el modelo (la librería de CosyVoice maneja la compatibilidad interna)
-            self._model = CosyVoice(str(model_dir), load_jit=False, fp16=(self.device == "cuda"))
+                self._model = CosyVoice(str(model_dir), load_jit=False, fp16=(self.device == "cuda"))
+            
             print("Model loaded successfully!")
 
         except ImportError as e:
             raise ModelLoadError(
                 "CosyVoice library not installed or outdated. "
-                "Please update it with: pip install -U git+https://github.com/FunAudioLLM/CosyVoice.git"
+                "Please ensure the latest version is cloned and PYTHONPATH is set correctly."
             ) from e
         except Exception as e:
             raise ModelLoadError(f"Failed to load CosyVoice model: {e}") from e
