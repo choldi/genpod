@@ -1,5 +1,5 @@
 # ==============================================================================
-# Etapa 1: Construcción (Aquí sí necesitamos las herramientas de desarrollo)
+# Etapa 1: Construcción (Herramientas de desarrollo)
 # ==============================================================================
 FROM nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04 AS builder
 
@@ -22,36 +22,36 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir --user -r requirements.txt
-RUN pip install --no-cache-dir --user "transformers<4.38"
+# Usamos python3 -m pip para evitar problemas con enlaces simbólicos
+RUN python3 -m pip install --no-cache-dir --user -r requirements.txt
+RUN python3 -m pip install --no-cache-dir --user "transformers<4.38"
 
 # Clonar con profundidad 1 para no descargar el historial de Git innecesario
 RUN git clone --depth 1 --recursive https://github.com/QwenAudio/CosyVoice.git /opt/cosyvoice
 WORKDIR /opt/cosyvoice
 
 # FIX para compilación de dependencias antiguas
-RUN pip install --no-cache-dir --user "setuptools<71.0.0" wheel
-RUN pip install --no-cache-dir --user --no-build-isolation openai-whisper==20231117
-RUN pip install --no-cache-dir --user -r requirements.txt
+RUN python3 -m pip install --no-cache-dir --user "setuptools<71.0.0" wheel
+RUN python3 -m pip install --no-cache-dir --user --no-build-isolation openai-whisper==20231117
+RUN python3 -m pip install --no-cache-dir --user -r requirements.txt
 
 WORKDIR /app
 
 # ==============================================================================
 # Etapa 2: Ejecución (Imagen final ligera)
 # ==============================================================================
-# ¡CAMBIO CLAVE! Usamos 'runtime' en lugar de 'devel'. Ahorra ~8-10 GB.
 FROM nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 
-# Solo instalamos lo estrictamente necesario para ejecutar (no para compilar)
+# CORRECCIÓN: libsox3 es el nombre correcto en Ubuntu 22.04
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3.10 \
     python3-pip \
     ffmpeg \
     libsndfile1 \
-    libsox2 \
+    libsox3 \
     sox \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
@@ -60,10 +60,10 @@ RUN groupadd -r appuser && useradd -r -g appuser appuser
 
 WORKDIR /app
 
-# Copiar solo las dependencias de Python compiladas, no las herramientas de build
+# Copiar solo las dependencias de Python compiladas
 COPY --from=builder /root/.local /home/appuser/.local
 
-# Copiar el código de CosyVoice, pero eliminamos la carpeta .git para ahorrar espacio
+# Copiar el código de CosyVoice y eliminar metadatos de Git para ahorrar espacio
 COPY --from=builder /opt/cosyvoice /opt/cosyvoice
 RUN rm -rf /opt/cosyvoice/.git /opt/cosyvoice/.gitmodules
 
