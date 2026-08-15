@@ -329,32 +329,43 @@ class LightTTSEngine:
         try:
             prompt_text = metadata.get("transcript", "").strip()
             
-            # Workaround para el bug de wetext con el token endofprompt en español
-            if not prompt_text.endswith("<|endofprompt|>"):
-                if not any(prompt_text.endswith(p) for p in [".", "!", "?", "。", "！", "？"]):
-                    prompt_text += "."
-                prompt_text += "<|endofprompt|>"
+            # IMPORTANTE: Añadir <|endofprompt|> correctamente al prompt_text
+            # Primero asegurar que termina con puntuación
+            if not any(prompt_text.endswith(p) for p in [".", "!", "?", "。", "！", "？"]):
+                prompt_text += "."
+            # Luego añadir el token especial (sin espacios antes)
+            prompt_text += "<|endofprompt|>"
+            
+            # NO modificar el target_text, solo asegurar puntuación final
+            target_text = text.strip()
+            if not any(target_text.endswith(p) for p in [".", "!", "?", "。", "！", "？"]):
+                target_text += "."
+            
+            print(f"🔍 DEBUG: prompt_text: '{prompt_text}'")
+            print(f"🔍 DEBUG: target_text: '{target_text[:80]}...'")
             
             # Dividir el texto en chunks manejables
-            text_chunks = self._split_text_into_chunks(text, max_chars=200)
+            text_chunks = self._split_text_into_chunks(target_text, max_chars=200)
             print(f"🔍 DEBUG: Texto dividido en {len(text_chunks)} fragmentos")
             
             all_speech_chunks = []
             
             # Procesar cada chunk por separado
             for idx, chunk in enumerate(text_chunks):
-                print(f"🔍 DEBUG: Procesando fragmento {idx+1}/{len(text_chunks)}: '{chunk[:50]}...'")
+                print(f"🔊 Sintetizando fragmento {idx+1}/{len(text_chunks)}: '{chunk[:60]}...'")
                 
-                # Asegurar que el chunk termine en puntuación
+                # Asegurar que el chunk termina con puntuación
                 if not any(chunk.endswith(p) for p in [".", "!", "?", "。", "！", "？"]):
                     chunk += "."
                 
                 # Llamar al modelo para este chunk específico
+                # IMPORTANTE: Usar el mismo prompt_text para todos los chunks
                 output_generator = self._model.inference_zero_shot(
                     chunk, prompt_text, str(ref_audio_path), stream=False
                 )
                 
                 # Capturar el audio generado para este chunk
+                chunk_speech = None
                 for out_dict in output_generator:
                     speech = out_dict['tts_speech']
                     if speech.dim() == 3:
@@ -362,8 +373,16 @@ class LightTTSEngine:
                     if speech.dim() == 1:
                         speech = speech.unsqueeze(0)
                     
-                    all_speech_chunks.append(speech.cpu())
-                    break  # Solo necesitamos el primer output de cada chunk
+                    # Solo tomar el primer output (evitar duplicados)
+                    if chunk_speech is None:
+                        chunk_speech = speech.cpu()
+                    break  # Salir después del primer output
+                
+                if chunk_speech is not None and chunk_speech.shape[-1] > 1000:
+                    all_speech_chunks.append(chunk_speech)
+                    print(f"✅ Fragmento {idx+1} generado: {chunk_speech.shape[-1]/24000:.2f}s")
+                else:
+                    print(f"⚠️  WARNING: Fragmento {idx+1} no generó audio válido")
             
             if not all_speech_chunks:
                 raise SynthesisError("El modelo no generó ningún audio.")
@@ -371,13 +390,8 @@ class LightTTSEngine:
             # Concatenar todos los fragmentos en un solo tensor de audio
             speech = torch.cat(all_speech_chunks, dim=-1)
             
-            print(f"🔍 DEBUG: Audio final concatenado shape: {speech.shape} ({speech.shape[-1]/24000:.2f} segundos)")
+            print(f"🎵 Audio final concatenado: {speech.shape[-1]/24000:.2f} segundos")
             
-            if speech.shape[-1] < 1000:
-                raise SynthesisError(
-                    f"El modelo generó un audio inválido (longitud: {speech.shape[-1]} muestras)."
-                )
-
             if speed != 1.0:
                 speech = torchaudio.functional.resample(speech, int(24000 * speed), 24000)
             
