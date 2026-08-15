@@ -60,8 +60,8 @@ COSYVOICE3_STYLE_TAGS = {
 
 # Maximum length for prompt text to avoid model reproducing it
 MAX_PROMPT_CHARS = 50
-# Maximum length for each synthesis chunk
-MAX_CHUNK_CHARS = 100
+# Maximum length for each synthesis chunk (increased for better context)
+MAX_CHUNK_CHARS = 300
 # Minimum valid audio length in samples (0.1s at 24kHz)
 MIN_AUDIO_SAMPLES = 2400
 
@@ -318,7 +318,7 @@ class LightTTSEngine:
                 os.remove(tmp_path)
 
     def _split_text_into_chunks(self, text: str, max_chars: int = MAX_CHUNK_CHARS) -> List[str]:
-        """Split text into chunks based on sentence boundaries."""
+        """Split text into chunks based on sentence boundaries with overlap for continuity."""
         # Split by sentence-ending punctuation followed by whitespace or end of string
         sentences = re.split(r'(?<=[.!?。！？])\s*', text)
         # Filter out empty strings
@@ -331,6 +331,9 @@ class LightTTSEngine:
             # If adding this sentence would exceed max_chars and we have content, finalize current chunk
             if len(current_chunk) + len(sentence) > max_chars and current_chunk:
                 chunks.append(current_chunk.strip())
+                # Start new chunk with overlap: last sentence of previous chunk for context
+                # But only if the previous chunk had more than one sentence
+                last_sentence = current_chunk.strip().split()[-1] if current_chunk.strip() else ""
                 current_chunk = sentence
             else:
                 current_chunk += (" " if current_chunk else "") + sentence
@@ -490,13 +493,14 @@ class LightTTSEngine:
             if not any(target_text.endswith(p) for p in [".", "!", "?", "。", "！", "？"]):
                 target_text += "."
 
-            # For CosyVoice 3, use streaming zero-shot if available
-            if self._model_version == "v3" and hasattr(self._model, 'inference_zero_shot_stream'):
+            # Try streaming zero-shot inference for ALL model versions if available
+            if hasattr(self._model, 'inference_zero_shot') and callable(getattr(self._model, 'inference_zero_shot', None)):
+                # Check if streaming is supported by trying stream=True
                 return self._synthesize_cloned_segment_streaming(
                     target_text, prompt_text, str(ref_audio_path), speed, pitch
                 )
 
-            # For v1/v2, use chunked synthesis
+            # Fallback to chunked synthesis only if streaming not available
             return self._synthesize_cloned_segment_chunked(
                 target_text, prompt_text, str(ref_audio_path), speed, pitch
             )
@@ -517,10 +521,11 @@ class LightTTSEngine:
         speed: float,
         pitch: float,
     ) -> bytes:
-        """Synthesize cloned voice using CosyVoice 3 streaming zero-shot inference."""
+        """Synthesize cloned voice using streaming zero-shot inference (all versions)."""
         try:
-            logger.debug(f"Streaming zero-shot synthesis (v3): '{target_text[:60]}...'")
+            logger.debug(f"Streaming zero-shot synthesis ({self._model_version}): '{target_text[:60]}...'")
 
+            # Try streaming first
             output_generator = self._model.inference_zero_shot(
                 target_text, prompt_text, ref_audio_path, stream=True
             )
@@ -548,8 +553,55 @@ class LightTTSEngine:
             return self._tensor_to_wav_bytes(speech)
 
         except Exception as e:
-            logger.warning(f"Streaming zero-shot failed, falling back to chunked: {e}")
-            return self._synthesize_cloned_segment_chunked(target_text, prompt_text, ref_audio_path, speed, pitch)
+            logger.warning(f"Streaming zero-shot failed, falling back to single-shot: {e}")
+            # Fallback to single-shot for the entire text (not chunked)
+            return self._synthesize_cloned_segment_single_shot(
+                target_text, prompt_text, ref_audio_path, speed, pitch
+            )
+
+    def _synthesize_cloned_segment_single_shot(
+        self,
+        target_text: str,
+        prompt_text: str,
+        ref_audio_path: str,
+        speed: float,
+        pitch: float,
+    ) -> bytes:
+        """Synthesize cloned voice in a single shot for the entire text."""
+        try:
+            logger.debug(f"Single-shot zero-shot synthesis: '{target_text[:60]}...'")
+
+            output_generator = self._model.inference_zero_shot(
+                target_text, prompt_text, ref_audio_path, stream=False
+            )
+
+            all_speech_chunks: List[torch.Tensor] = []
+            for out_dict in output_generator:
+                speech = out_dict['tts_speech']
+                if speech.dim() == 3:
+                    speech = speech.squeeze(0)
+                if speech.dim() == 1:
+                    speech = speech.unsqueeze(0)
+                all_speech_chunks.append(speech.cpu())
+
+            if not all_speech_chunks:
+                raise SynthesisError("Model did not generate any audio for cloned voice (single-shot)")
+
+            speech = torch.cat(all_speech_chunks, dim=-1)
+            logger.debug(f"Single-shot cloned audio: {speech.shape[-1] / 24000:.2f}s")
+
+            if speed != 1.0:
+                speech = torchaudio.functional.resample(speech, int(24000 * speed), 24000)
+            if pitch != 1.0:
+                speech = self._apply_pitch_shift(speech, pitch)
+
+            return self._tensor_to_wav_bytes(speech)
+
+        except Exception as e:
+            logger.warning(f"Single-shot synthesis failed, falling back to chunked: {e}")
+            return self._synthesize_cloned_segment_chunked(
+                target_text, prompt_text, ref_audio_path, speed, pitch
+            )
 
     def _synthesize_cloned_segment_chunked(
         self,
@@ -559,10 +611,10 @@ class LightTTSEngine:
         speed: float,
         pitch: float,
     ) -> bytes:
-        """Synthesize cloned voice by chunks (v1/v2)."""
-        # Split into manageable chunks
-        text_chunks = self._split_text_into_chunks(target_text)
-        logger.debug(f"Cloned voice: text split into {len(text_chunks)} chunks")
+        """Synthesize cloned voice by chunks (last resort for v1/v2)."""
+        # Split into manageable chunks with larger size for better context
+        text_chunks = self._split_text_into_chunks(target_text, max_chars=MAX_CHUNK_CHARS)
+        logger.debug(f"Cloned voice: text split into {len(text_chunks)} chunks (fallback)")
 
         all_speech_chunks: List[torch.Tensor] = []
 
