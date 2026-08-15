@@ -1,12 +1,11 @@
 # ==============================================================================
-# Etapa de construcción
+# Etapa 1: Construcción (Aquí sí necesitamos las herramientas de desarrollo)
 # ==============================================================================
-FROM nvidia/cuda:12.1.0-cudnn8-devel-ubuntu22.04 AS builder
+FROM nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04 AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 
-# Añadimos python3.10-dev y libsox-dev/sox para que pyworld y los efectos de audio compilen
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3.10 \
     python3.10-dev \
@@ -14,6 +13,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-pip \
     build-essential \
     gcc \
+    cmake \
     git \
     libsox-dev \
     sox \
@@ -25,58 +25,57 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --user -r requirements.txt
 RUN pip install --no-cache-dir --user "transformers<4.38"
 
-# Clonar CosyVoice e instalar sus dependencias específicas
-RUN git clone --recursive https://github.com/QwenAudio/CosyVoice.git /opt/cosyvoice
+# Clonar con profundidad 1 para no descargar el historial de Git innecesario
+RUN git clone --depth 1 --recursive https://github.com/QwenAudio/CosyVoice.git /opt/cosyvoice
 WORKDIR /opt/cosyvoice
 
-# FIX DEFINITIVO (de tu versión original):
-# 1. Instalar setuptools<71 (que aún incluye pkg_resources) y wheel
+# FIX para compilación de dependencias antiguas
 RUN pip install --no-cache-dir --user "setuptools<71.0.0" wheel
-
-# 2. Instalar openai-whisper primero con --no-build-isolation para que use el setuptools<71
 RUN pip install --no-cache-dir --user --no-build-isolation openai-whisper==20231117
-
-# 3. Instalar el resto de requisitos de CosyVoice
 RUN pip install --no-cache-dir --user -r requirements.txt
 
 WORKDIR /app
 
 # ==============================================================================
-# Etapa final
+# Etapa 2: Ejecución (Imagen final ligera)
 # ==============================================================================
-FROM nvidia/cuda:12.1.0-cudnn8-devel-ubuntu22.04
+# ¡CAMBIO CLAVE! Usamos 'runtime' en lugar de 'devel'. Ahorra ~8-10 GB.
+FROM nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 
+# Solo instalamos lo estrictamente necesario para ejecutar (no para compilar)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3.10 \
     python3-pip \
     ffmpeg \
     libsndfile1 \
-    libsox-dev \
+    libsox2 \
     sox \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
 
 RUN groupadd -r appuser && useradd -r -g appuser appuser
 
 WORKDIR /app
 
-# Copiar las dependencias de Python instaladas en el builder
+# Copiar solo las dependencias de Python compiladas, no las herramientas de build
 COPY --from=builder /root/.local /home/appuser/.local
 
-# Copiar el código fuente de CosyVoice a la imagen final
+# Copiar el código de CosyVoice, pero eliminamos la carpeta .git para ahorrar espacio
 COPY --from=builder /opt/cosyvoice /opt/cosyvoice
+RUN rm -rf /opt/cosyvoice/.git /opt/cosyvoice/.gitmodules
 
 COPY --chown=appuser:appuser . .
 
+# Crear directorios de trabajo y asignar permisos
 RUN mkdir -p /app/data/models /app/data/voices /app/tmp/matplotlib /app/tmp/huggingface && \
     chown -R appuser:appuser /app/data /app/tmp
 
 RUN chmod +x /app/docker/entrypoint.sh
 
 ENV PATH=/home/appuser/.local/bin:$PATH
-# Añadir CosyVoice y /app al PYTHONPATH para que los imports funcionen
 ENV PYTHONPATH=/opt/cosyvoice:/opt/cosyvoice/third_party/Matcha-TTS:/app:$PYTHONPATH
 ENV NUMBA_DISABLE_JIT=1
 ENV NUMBA_CACHE_DIR=/tmp
@@ -85,6 +84,6 @@ ENV TRANSFORMERS_CACHE=/app/tmp/huggingface
    
 USER appuser
 
-# Esta combinación es la que mantiene el contenedor vivo:
 ENTRYPOINT ["/app/docker/entrypoint.sh"]
 CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+
