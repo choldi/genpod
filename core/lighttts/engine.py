@@ -5,7 +5,7 @@ import re
 import logging
 import tempfile
 from pathlib import Path
-from typing import Generator, List, Dict, Any
+from typing import Generator, List, Dict, Any, Optional
 import torch
 import torchaudio
 
@@ -281,36 +281,6 @@ class LightTTSEngine:
             if os.path.exists(tmp_path):
                 os.remove(tmp_path)
 
-    def _synthesize_base_segment(
-        self, text: str, spk_id: str, speed: float, pitch: float
-    ) -> bytes:
-        """Synthesize a single segment using base voice and return bytes."""
-        try:
-            output_generator = self._model.inference_sft(text, spk_id, stream=False)
-
-            all_speech_chunks: List[torch.Tensor] = []
-            for out_dict in output_generator:
-                speech = out_dict['tts_speech']
-                if speech.dim() == 3:
-                    speech = speech.squeeze(0)
-                all_speech_chunks.append(speech.cpu())
-
-            if not all_speech_chunks:
-                return b""
-
-            speech = torch.cat(all_speech_chunks, dim=-1)
-
-            if speed != 1.0:
-                speech = torchaudio.functional.resample(speech, int(24000 * speed), 24000)
-
-            if pitch != 1.0:
-                speech = self._apply_pitch_shift(speech, pitch)
-
-            return self._tensor_to_wav_bytes(speech)
-
-        except Exception as e:
-            raise SynthesisError(f"Base voice synthesis failed: {e}") from e
-
     def _split_text_into_chunks(self, text: str, max_chars: int = MAX_CHUNK_CHARS) -> List[str]:
         """Split text into chunks based on sentence boundaries."""
         sentences = re.split(r'(?<=[.!?。！？])\s+', text)
@@ -333,7 +303,7 @@ class LightTTSEngine:
     def _prepare_prompt_text(self, transcript: str) -> str:
         """Prepare the prompt text for zero-shot inference.
 
-        Truncates the transcript to avoid the model reproducing it,
+        Truncates the transcript to avoid model reproducing it,
         and appends the end-of-prompt token.
         """
         prompt = transcript.strip()
@@ -350,6 +320,58 @@ class LightTTSEngine:
         prompt += "<|endofprompt|>"
 
         return prompt
+
+    def _synthesize_base_segment(
+        self, text: str, spk_id: str, speed: float, pitch: float
+    ) -> bytes:
+        """Synthesize a single segment using base voice and return bytes."""
+        try:
+            # Split long text into chunks to avoid model limitations
+            text_chunks = self._split_text_into_chunks(text)
+            logger.debug(f"Base voice: text split into {len(text_chunks)} chunks")
+
+            all_speech_chunks: List[torch.Tensor] = []
+
+            for idx, chunk in enumerate(text_chunks):
+                logger.debug(f"Synthesizing base chunk {idx + 1}/{len(text_chunks)}: '{chunk[:60]}...'")
+
+                # Ensure chunk ends with punctuation
+                if not any(chunk.endswith(p) for p in [".", "!", "?", "。", "！", "？"]):
+                    chunk += "."
+
+                output_generator = self._model.inference_sft(chunk, spk_id, stream=False)
+
+                chunk_speech_list: List[torch.Tensor] = []
+                for out_dict in output_generator:
+                    speech = out_dict['tts_speech']
+                    if speech.dim() == 3:
+                        speech = speech.squeeze(0)
+                    chunk_speech_list.append(speech.cpu())
+
+                if chunk_speech_list:
+                    chunk_speech = torch.cat(chunk_speech_list, dim=-1)
+                    if chunk_speech.shape[-1] >= MIN_AUDIO_SAMPLES:
+                        all_speech_chunks.append(chunk_speech)
+                        logger.debug(f"Base chunk {idx + 1} generated: {chunk_speech.shape[-1] / 24000:.2f}s")
+                    else:
+                        logger.warning(f"Base chunk {idx + 1} did not generate valid audio")
+
+            if not all_speech_chunks:
+                raise SynthesisError("Model did not generate any audio for base voice")
+
+            speech = torch.cat(all_speech_chunks, dim=-1)
+            logger.debug(f"Final base audio: {speech.shape[-1] / 24000:.2f}s")
+
+            if speed != 1.0:
+                speech = torchaudio.functional.resample(speech, int(24000 * speed), 24000)
+
+            if pitch != 1.0:
+                speech = self._apply_pitch_shift(speech, pitch)
+
+            return self._tensor_to_wav_bytes(speech)
+
+        except Exception as e:
+            raise SynthesisError(f"Base voice synthesis failed: {e}") from e
 
     def _synthesize_cloned_segment(
         self,
@@ -376,12 +398,12 @@ class LightTTSEngine:
 
             # Split into manageable chunks
             text_chunks = self._split_text_into_chunks(target_text)
-            logger.debug(f"Text split into {len(text_chunks)} chunks for voice '{voice_id}'")
+            logger.debug(f"Cloned voice: text split into {len(text_chunks)} chunks for voice '{voice_id}'")
 
             all_speech_chunks: List[torch.Tensor] = []
 
             for idx, chunk in enumerate(text_chunks):
-                logger.debug(f"Synthesizing chunk {idx + 1}/{len(text_chunks)}: '{chunk[:60]}...'")
+                logger.debug(f"Synthesizing cloned chunk {idx + 1}/{len(text_chunks)}: '{chunk[:60]}...'")
 
                 # Ensure chunk ends with punctuation
                 if not any(chunk.endswith(p) for p in [".", "!", "?", "。", "！", "？"]):
@@ -391,29 +413,28 @@ class LightTTSEngine:
                     chunk, prompt_text, str(ref_audio_path), stream=False
                 )
 
-                chunk_speech: Optional[torch.Tensor] = None
+                chunk_speech_list: List[torch.Tensor] = []
                 for out_dict in output_generator:
                     speech = out_dict['tts_speech']
                     if speech.dim() == 3:
                         speech = speech.squeeze(0)
                     if speech.dim() == 1:
                         speech = speech.unsqueeze(0)
+                    chunk_speech_list.append(speech.cpu())
 
-                    if chunk_speech is None:
-                        chunk_speech = speech.cpu()
-                    break
-
-                if chunk_speech is not None and chunk_speech.shape[-1] >= MIN_AUDIO_SAMPLES:
-                    all_speech_chunks.append(chunk_speech)
-                    logger.debug(f"Chunk {idx + 1} generated: {chunk_speech.shape[-1] / 24000:.2f}s")
-                else:
-                    logger.warning(f"Chunk {idx + 1} did not generate valid audio")
+                if chunk_speech_list:
+                    chunk_speech = torch.cat(chunk_speech_list, dim=-1)
+                    if chunk_speech.shape[-1] >= MIN_AUDIO_SAMPLES:
+                        all_speech_chunks.append(chunk_speech)
+                        logger.debug(f"Cloned chunk {idx + 1} generated: {chunk_speech.shape[-1] / 24000:.2f}s")
+                    else:
+                        logger.warning(f"Cloned chunk {idx + 1} did not generate valid audio")
 
             if not all_speech_chunks:
-                raise SynthesisError("Model did not generate any audio")
+                raise SynthesisError("Model did not generate any audio for cloned voice")
 
             speech = torch.cat(all_speech_chunks, dim=-1)
-            logger.debug(f"Final audio: {speech.shape[-1] / 24000:.2f}s")
+            logger.debug(f"Final cloned audio: {speech.shape[-1] / 24000:.2f}s")
 
             if speed != 1.0:
                 speech = torchaudio.functional.resample(speech, int(24000 * speed), 24000)
