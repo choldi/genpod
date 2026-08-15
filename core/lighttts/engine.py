@@ -296,37 +296,31 @@ class LightTTSEngine:
             raise VoiceNotFoundError(f"Reference audio for voice '{voice_id}' not found")
 
         try:
-            prompt_text = metadata.get("transcript", "")
+            prompt_text = metadata.get("transcript", "").strip()
             
-            # 🔍 LOGS DE DEPURACIÓN
-            print(f"\n{'='*60}")
-            print(f"🔍 SYNTHESIS DEBUG")
-            print(f"{'='*60}")
-            print(f"Voice ID: {voice_id}")
-            print(f"Target text: '{text}'")
-            print(f"Prompt text: '{prompt_text}'")
-            print(f"Reference audio: {ref_audio_path}")
+            # 🛠️ WORKAROUND: El frontend 'wetext' de CosyVoice 3 a veces omite el token 
+            # <|endofprompt|> en textos en español. Lo añadimos manualmente para evitar 
+            # que el LLM colapse con el error "not detected in CosyVoice3 text".
+            if not prompt_text.endswith("<|endofprompt|>"):
+                # Asegurar que termine en puntuación antes del token
+                if not any(prompt_text.endswith(p) for p in [".", "!", "?", "。", "！", "？"]):
+                    prompt_text += "."
+                prompt_text += "<|endofprompt|>"
             
-            # Verificar formato del audio de referencia
-            try:
-                info = torchaudio.info(str(ref_audio_path))
-                print(f"Audio info: {info.sample_rate}Hz, {info.num_channels} channels, {info.num_frames/info.sample_rate:.2f}s")
-            except Exception as e:
-                print(f"⚠️  Error reading audio info: {e}")
+            # También aseguramos que el texto de destino tenga puntuación final
+            target_text = text.strip()
+            if not any(target_text.endswith(p) for p in [".", "!", "?", "。", "！", "？"]):
+                target_text += "."
             
-            print(f"{'='*60}\n")
+            print(f"🔍 DEBUG: Final prompt_text enviado al modelo: '{prompt_text}'")
+            print(f"🔍 DEBUG: Final target_text enviado al modelo: '{target_text}'")
             
             output_generator = self._model.inference_zero_shot(
-                text, prompt_text, str(ref_audio_path), stream=False
+                target_text, prompt_text, str(ref_audio_path), stream=False
             )
             
             for out_dict in output_generator:
                 speech = out_dict['tts_speech']
-                
-                print(f"🔍 Generated speech shape: {speech.shape}")
-                print(f"🔍 Generated speech dtype: {speech.dtype}")
-                print(f"🔍 Generated speech device: {speech.device}")
-                print(f"🔍 Generated speech min/max: {speech.min().item():.4f} / {speech.max().item():.4f}")
                 
                 # Asegurar formato correcto [canales, muestras]
                 if speech.dim() == 3:
@@ -334,21 +328,12 @@ class LightTTSEngine:
                 if speech.dim() == 1:
                     speech = speech.unsqueeze(0)
                 
-                print(f"🔍 After reshape: {speech.shape}")
-                
-                # Si el audio es demasiado corto, el vocoder fallará
+                # Prevención del error de kernel size (audio demasiado corto)
                 if speech.shape[-1] < 1000:
-                    error_msg = (
+                    raise SynthesisError(
                         f"El modelo generó un audio inválido (longitud: {speech.shape[-1]} muestras). "
-                        f"Esto indica que CosyVoice 3 no pudo procesar la combinación de texto y audio de referencia.\n"
-                        f"Posibles causas:\n"
-                        f"1. La transcripción no coincide exactamente con el audio\n"
-                        f"2. El audio de referencia tiene problemas de formato\n"
-                        f"3. El texto contiene caracteres que el tokenizador no puede procesar\n"
-                        f"4. El audio es demasiado corto o muy largo"
+                        "Esto indica que el LLM falló internamente, posiblemente por un problema de tokenización."
                     )
-                    print(f"❌ ERROR: {error_msg}")
-                    raise SynthesisError(error_msg)
 
                 if speed != 1.0:
                     speech = torchaudio.functional.resample(speech, int(24000 * speed), 24000)
