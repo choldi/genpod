@@ -1,67 +1,62 @@
-# Etapa de construcción
-FROM python:3.10-slim AS builder
+# Usamos una imagen base con CUDA 12.1 y Python 3.10 (estándar para CosyVoice)
+FROM nvidia/cuda:12.1.0-cudnn8-devel-ubuntu22.04
 
+# Configuración de entorno
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PIP_NO_CACHE_DIR=1
+
+# Instalar dependencias del sistema necesarias para CosyVoice y compilación
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    gcc \
+    python3.10 \
+    python3.10-venv \
+    python3.10-distutils \
+    python3-pip \
     git \
-    && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /app
-
-COPY requirements.txt .
-RUN pip install --no-cache-dir --user -r requirements.txt
-RUN pip install --no-cache-dir --user "transformers<4.38"
-
-# Clonar CosyVoice e instalar sus dependencias específicas
-RUN git clone --recursive https://github.com/QwenAudio/CosyVoice.git /opt/cosyvoice
-WORKDIR /opt/cosyvoice
-
-# FIX DEFINITIVO:
-# 1. Instalar setuptools<71 (que aún incluye pkg_resources) y wheel
-RUN pip install --no-cache-dir --user "setuptools<71.0.0" wheel
-
-# 2. Instalar openai-whisper primero con --no-build-isolation para que use el setuptools<71
-RUN pip install --no-cache-dir --user --no-build-isolation openai-whisper==20231117
-
-# 3. Instalar el resto de requisitos (pip omitirá openai-whisper porque ya está instalado, 
-#    y el resto se compilará con aislamiento normal, evitando el error de tensorrt)
-RUN pip install --no-cache-dir --user -r requirements.txt
-RUN pip install --no-cache-dir --user "transformers<4.38"
-
-WORKDIR /app
-
-# Etapa final
-FROM python:3.10-slim
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    cmake \
     ffmpeg \
+    sox \
+    libsox-dev \
     libsndfile1 \
+    wget \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
-RUN groupadd -r appuser && useradd -r -g appuser appuser
+# Establecer enlaces simbólicos para python3 y pip3
+RUN ln -s /usr/bin/python3.10 /usr/bin/python3 && \
+    ln -s /usr/bin/pip3 /usr/bin/pip
 
+# Crear directorio de trabajo
 WORKDIR /app
 
-# Copiar las dependencias de Python instaladas en el builder
-COPY --from=builder /root/.local /home/appuser/.local
+# 1. Copiar e instalar los requisitos BASE de TU proyecto primero
+# (Esto permite cachear esta capa si solo cambias el código de CosyVoice)
+COPY requirements.txt .
+RUN pip install --user -r requirements.txt
 
-# Copiar el código fuente de CosyVoice a la imagen final
-COPY --from=builder /opt/cosyvoice /opt/cosyvoice
+# 2. Clonar el repositorio oficial de CosyVoice (rama main para soporte v3)
+# Es crucial usar --recursive para descargar los submódulos (ej. Matcha-TTS)
+RUN git clone --recursive https://github.com/QwenAudio/CosyVoice.git /app/CosyVoice
 
-COPY --chown=appuser:appuser . .
+# 3. Configurar PYTHONPATH para incluir CosyVoice y sus submódulos
+# Esto es vital porque CosyVoice ya no tiene setup.py, así que lo tratamos como un módulo fuente
+ENV PYTHONPATH="${PYTHONPATH}:/app/CosyVoice:/app/CosyVoice/third_party/Matcha-TTS"
 
-RUN mkdir -p /app/data/models /app/data/voices && chown -R appuser:appuser /app/data
+# 4. Instalar las dependencias ESPECÍFICAS de CosyVoice desde su requirements.txt
+# Usamos el mirror de Aliyun por velocidad, o quita '-i ...' si prefieres PyPI global
+RUN pip install --user -r /app/CosyVoice/requirements.txt
 
-RUN chmod +x /app/docker/entrypoint.sh
+# 5. Copiar el resto de tu aplicación
+COPY . .
 
-ENV PATH=/home/appuser/.local/bin:$PATH
-# Añadir CosyVoice y /app al PYTHONPATH para que los imports funcionen
-ENV PYTHONPATH=/opt/cosyvoice:/opt/cosyvoice/third_party/Matcha-TTS:/app:$PYTHONPATH
-ENV NUMBA_DISABLE_JIT=1
-ENV NUMBA_CACHE_DIR=/tmp
-   
-USER appuser
+# Asegurar permisos de ejecución en scripts propios
+RUN chmod +x docker/entrypoint.sh
 
-ENTRYPOINT ["/app/docker/entrypoint.sh"]
-CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Puerto por defecto
+EXPOSE 8000
+
+# Comando de entrada
+CMD ["docker/entrypoint.sh"]
+
