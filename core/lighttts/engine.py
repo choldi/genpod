@@ -60,8 +60,10 @@ COSYVOICE3_STYLE_TAGS = {
 
 # Maximum length for prompt text to avoid model reproducing it
 MAX_PROMPT_CHARS = 50
-# Maximum length for each synthesis chunk (increased for better context)
-MAX_CHUNK_CHARS = 300
+# Maximum length for each synthesis chunk (increased significantly for better context)
+MAX_CHUNK_CHARS = 1000
+# Minimum text length to trigger chunking (avoid unnecessary chunking)
+MIN_CHUNK_THRESHOLD = 1500
 # Minimum valid audio length in samples (0.1s at 24kHz)
 MIN_AUDIO_SAMPLES = 2400
 
@@ -318,28 +320,47 @@ class LightTTSEngine:
                 os.remove(tmp_path)
 
     def _split_text_into_chunks(self, text: str, max_chars: int = MAX_CHUNK_CHARS) -> List[str]:
-        """Split text into chunks based on sentence boundaries with overlap for continuity."""
+        """Split text into chunks based on sentence boundaries with sentence-level overlap for continuity."""
         # Split by sentence-ending punctuation followed by whitespace or end of string
         sentences = re.split(r'(?<=[.!?。！？])\s*', text)
         # Filter out empty strings
         sentences = [s.strip() for s in sentences if s.strip()]
 
+        if not sentences:
+            return [text]
+
         chunks: List[str] = []
         current_chunk = ""
 
-        for sentence in sentences:
+        for i, sentence in enumerate(sentences):
             # If adding this sentence would exceed max_chars and we have content, finalize current chunk
             if len(current_chunk) + len(sentence) > max_chars and current_chunk:
                 chunks.append(current_chunk.strip())
                 # Start new chunk with overlap: last sentence of previous chunk for context
-                # But only if the previous chunk had more than one sentence
-                last_sentence = current_chunk.strip().split()[-1] if current_chunk.strip() else ""
-                current_chunk = sentence
+                # Find the last sentence in current_chunk
+                last_sentences = re.split(r'(?<=[.!?。！？])\s*', current_chunk.strip())
+                last_sentences = [s.strip() for s in last_sentences if s.strip()]
+                overlap = last_sentences[-1] if last_sentences else ""
+                current_chunk = (overlap + " " + sentence).strip() if overlap else sentence
             else:
                 current_chunk += (" " if current_chunk else "") + sentence
 
         if current_chunk.strip():
             chunks.append(current_chunk.strip())
+
+        # If we only have one chunk but it's very long, force split at max_chars (shouldn't happen with sentence splitting)
+        if len(chunks) == 1 and len(chunks[0]) > max_chars * 1.5:
+            # Fallback: hard split
+            long_text = chunks[0]
+            chunks = []
+            for i in range(0, len(long_text), max_chars):
+                chunk = long_text[i:i + max_chars]
+                # Try to break at sentence boundary
+                last_punct = max(chunk.rfind('.'), chunk.rfind('!'), chunk.rfind('?'),
+                                chunk.rfind('。'), chunk.rfind('！'), chunk.rfind('？'))
+                if last_punct > max_chars * 0.5:
+                    chunk = chunk[:last_punct + 1]
+                chunks.append(chunk.strip())
 
         return chunks if chunks else [text]
 
@@ -493,17 +514,24 @@ class LightTTSEngine:
             if not any(target_text.endswith(p) for p in [".", "!", "?", "。", "！", "？"]):
                 target_text += "."
 
-            # Try streaming zero-shot inference for ALL model versions if available
-            if hasattr(self._model, 'inference_zero_shot') and callable(getattr(self._model, 'inference_zero_shot', None)):
-                # Check if streaming is supported by trying stream=True
-                return self._synthesize_cloned_segment_streaming(
+            # For cloned voices, avoid chunking unless text is very long
+            # CosyVoice zero-shot should handle up to ~1500 chars in single shot
+            if len(target_text) <= MIN_CHUNK_THRESHOLD:
+                # Try streaming zero-shot inference for ALL model versions if available
+                if hasattr(self._model, 'inference_zero_shot') and callable(getattr(self._model, 'inference_zero_shot', None)):
+                    return self._synthesize_cloned_segment_streaming(
+                        target_text, prompt_text, str(ref_audio_path), speed, pitch
+                    )
+                # Fallback to single-shot for the entire text
+                return self._synthesize_cloned_segment_single_shot(
                     target_text, prompt_text, str(ref_audio_path), speed, pitch
                 )
-
-            # Fallback to chunked synthesis only if streaming not available
-            return self._synthesize_cloned_segment_chunked(
-                target_text, prompt_text, str(ref_audio_path), speed, pitch
-            )
+            else:
+                # Text is very long, use chunked synthesis as last resort
+                logger.warning(f"Text length {len(target_text)} exceeds threshold, using chunked synthesis")
+                return self._synthesize_cloned_segment_chunked(
+                    target_text, prompt_text, str(ref_audio_path), speed, pitch
+                )
 
         except VoiceNotFoundError:
             raise
@@ -611,7 +639,7 @@ class LightTTSEngine:
         speed: float,
         pitch: float,
     ) -> bytes:
-        """Synthesize cloned voice by chunks (last resort for v1/v2)."""
+        """Synthesize cloned voice by chunks (last resort for very long texts)."""
         # Split into manageable chunks with larger size for better context
         text_chunks = self._split_text_into_chunks(target_text, max_chars=MAX_CHUNK_CHARS)
         logger.debug(f"Cloned voice: text split into {len(text_chunks)} chunks (fallback)")
@@ -625,8 +653,12 @@ class LightTTSEngine:
             if not any(chunk.endswith(p) for p in [".", "!", "?", "。", "！", "？"]):
                 chunk += "."
 
+            # For first chunk, use full prompt; for subsequent chunks, use minimal prompt to reduce hallucination
+            # This is a workaround - ideally the model would support continuation without prompt
+            current_prompt = prompt_text if idx == 0 else "<|endofprompt|>"
+
             output_generator = self._model.inference_zero_shot(
-                chunk, prompt_text, ref_audio_path, stream=False
+                chunk, current_prompt, ref_audio_path, stream=False
             )
 
             chunk_speech_list: List[torch.Tensor] = []
