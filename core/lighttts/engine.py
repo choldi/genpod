@@ -384,3 +384,55 @@ def _synthesize_cloned_segment(
         self._voice_manager.save_voice_metadata(voice_id, metadata)
         return voice_id
 
+    def clone_voice(
+        self, audio_path: str, transcript: str, voice_name: str, language: str = "en"
+    ) -> str:
+        """Clone a voice from reference audio and transcript."""
+        if not self._model:
+            raise CloningError("Model not loaded")
+        audio_path = Path(audio_path)
+        if not audio_path.exists():
+            raise CloningError(f"Reference audio not found: {audio_path}")
+        
+        try:
+            info = torchaudio.info(str(audio_path))
+            duration = info.num_frames / info.sample_rate
+            if duration < 3.0:
+                raise AudioTooShortError(
+                    f"Reference audio too short: {duration:.1f}s. Minimum 3 seconds required."
+                )
+            if duration > 30.0:
+                print(f"Warning: Reference audio is long ({duration:.1f}s). "
+                      "Consider using a shorter clip for better results.")
+        except AudioTooShortError:
+            raise
+        except Exception as e:
+            raise CloningError(f"Failed to validate audio: {e}") from e
+        
+        voice_id = voice_name
+        voice_id_clean = re.sub(r'[^\w\-]', '_', voice_id)
+        voice_id = voice_id_clean[:32]
+        
+        dest_audio = self.voices_path / f"{voice_id}.wav"
+        try:
+            waveform, sr = torchaudio.load(str(audio_path))
+            if sr != 24000:
+                resampler = torchaudio.transforms.Resample(sr, 24000)
+                waveform = resampler(waveform)
+            torchaudio.save(str(dest_audio), waveform, 24000)
+        except Exception as e:
+            raise CloningError(f"Failed to process reference audio: {e}") from e
+        
+        metadata = {
+            "voice_id": voice_id,
+            "name": voice_name,
+            "language": language,
+            "gender": "unknown",
+            "is_cloned": True,
+            "sample_rate": 24000,
+            "transcript": transcript,
+            "created_at": str(torch.tensor(0).numpy()),
+        }
+        self._voice_manager.save_voice_metadata(voice_id, metadata)
+        return voice_id
+
