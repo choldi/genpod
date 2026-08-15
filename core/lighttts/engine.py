@@ -257,31 +257,37 @@ class LightTTSEngine:
         try:
             output_generator = self._model.inference_sft(text, spk_id, stream=False)
             
+            all_speech_chunks = []
             for out_dict in output_generator:
                 speech = out_dict['tts_speech']
                 if speech.dim() == 3:
                     speech = speech.squeeze(0)
-                
-                if speed != 1.0:
-                    speech = torchaudio.functional.resample(speech, int(24000 * speed), 24000)
-                
-                if pitch != 1.0:
-                    speech = self._apply_pitch_shift(speech, pitch)
-                
-                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
-                    tmp_path = tmp_file.name
-                
-                try:
-                    torchaudio.save(tmp_path, speech.cpu(), 24000, format="wav")
-                    with open(tmp_path, "rb") as f:
-                        audio_bytes = f.read()
-                finally:
-                    if os.path.exists(tmp_path):
-                        os.remove(tmp_path)
-                
-                return audio_bytes
+                all_speech_chunks.append(speech.cpu())
             
-            return b""
+            if not all_speech_chunks:
+                return b""
+                
+            # Concatenar todos los fragmentos en un solo tensor de audio
+            speech = torch.cat(all_speech_chunks, dim=-1)
+            
+            if speed != 1.0:
+                speech = torchaudio.functional.resample(speech, int(24000 * speed), 24000)
+            
+            if pitch != 1.0:
+                speech = self._apply_pitch_shift(speech, pitch)
+            
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
+                tmp_path = tmp_file.name
+            
+            try:
+                torchaudio.save(tmp_path, speech, 24000, format="wav")
+                with open(tmp_path, "rb") as f:
+                    audio_bytes = f.read()
+            finally:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+            
+            return audio_bytes
         except Exception as e:
             raise SynthesisError(f"Base voice synthesis failed: {e}") from e
 
@@ -298,65 +304,63 @@ class LightTTSEngine:
         try:
             prompt_text = metadata.get("transcript", "").strip()
             
-            # 🛠️ WORKAROUND: El frontend 'wetext' de CosyVoice 3 a veces omite el token 
-            # <|endofprompt|> en textos en español. Lo añadimos manualmente para evitar 
-            # que el LLM colapse con el error "not detected in CosyVoice3 text".
+            # Workaround para el bug de wetext con el token endofprompt en español
             if not prompt_text.endswith("<|endofprompt|>"):
-                # Asegurar que termine en puntuación antes del token
                 if not any(prompt_text.endswith(p) for p in [".", "!", "?", "。", "！", "？"]):
                     prompt_text += "."
                 prompt_text += "<|endofprompt|>"
             
-            # También aseguramos que el texto de destino tenga puntuación final
             target_text = text.strip()
             if not any(target_text.endswith(p) for p in [".", "!", "?", "。", "！", "？"]):
                 target_text += "."
-            
-            print(f"🔍 DEBUG: Final prompt_text enviado al modelo: '{prompt_text}'")
-            print(f"🔍 DEBUG: Final target_text enviado al modelo: '{target_text}'")
             
             output_generator = self._model.inference_zero_shot(
                 target_text, prompt_text, str(ref_audio_path), stream=False
             )
             
+            all_speech_chunks = []
             for out_dict in output_generator:
                 speech = out_dict['tts_speech']
-                
-                # Asegurar formato correcto [canales, muestras]
                 if speech.dim() == 3:
                     speech = speech.squeeze(0)
                 if speech.dim() == 1:
                     speech = speech.unsqueeze(0)
                 
-                # Prevención del error de kernel size (audio demasiado corto)
-                if speech.shape[-1] < 1000:
-                    raise SynthesisError(
-                        f"El modelo generó un audio inválido (longitud: {speech.shape[-1]} muestras). "
-                        "Esto indica que el LLM falló internamente, posiblemente por un problema de tokenización."
-                    )
-
-                if speed != 1.0:
-                    speech = torchaudio.functional.resample(speech, int(24000 * speed), 24000)
-                
-                if pitch != 1.0:
-                    speech = self._apply_pitch_shift(speech, pitch)
-                
-                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
-                    tmp_path = tmp_file.name
-                
-                try:
-                    torchaudio.save(tmp_path, speech.cpu(), 24000, format="wav")
-                    with open(tmp_path, "rb") as f:
-                        audio_bytes = f.read()
-                finally:
-                    if os.path.exists(tmp_path):
-                        os.remove(tmp_path)
-                
-                print(f"✅ Synthesis successful: {len(audio_bytes)} bytes")
-                return audio_bytes
+                all_speech_chunks.append(speech.cpu())
             
-            print(f"❌ No output generated from model")
-            return b""
+            if not all_speech_chunks:
+                raise SynthesisError("El modelo no generó ningún audio.")
+            
+            # Concatenar todos los fragmentos en un solo tensor de audio
+            speech = torch.cat(all_speech_chunks, dim=-1)
+            
+            print(f"🔍 DEBUG: Audio final concatenado shape: {speech.shape} ({speech.shape[-1]/24000:.2f} segundos)")
+            
+            if speech.shape[-1] < 1000:
+                raise SynthesisError(
+                    f"El modelo generó un audio inválido (longitud: {speech.shape[-1]} muestras)."
+                )
+
+            if speed != 1.0:
+                speech = torchaudio.functional.resample(speech, int(24000 * speed), 24000)
+            
+            if pitch != 1.0:
+                speech = self._apply_pitch_shift(speech, pitch)
+            
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
+                tmp_path = tmp_file.name
+            
+            try:
+                torchaudio.save(tmp_path, speech, 24000, format="wav")
+                with open(tmp_path, "rb") as f:
+                    audio_bytes = f.read()
+            finally:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+            
+            print(f"✅ Synthesis successful: {len(audio_bytes)} bytes")
+            return audio_bytes
+            
         except VoiceNotFoundError:
             raise
         except SynthesisError:
