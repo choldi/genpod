@@ -297,22 +297,15 @@ class LightTTSEngine:
 
         try:
             prompt_text = metadata.get("transcript", "")
-            print(f"🔍 DEBUG: prompt_text = '{prompt_text}'")
-            print(f"🔍 DEBUG: target text = '{text}'")
             
-            # Usar la función oficial load_wav de CosyVoice para garantizar el formato correcto (tensor [1, samples] a 16kHz)
-            ref_speech = self._load_wav(str(ref_audio_path), 16000)
-            ref_speech = ref_speech.to(self.device)
-            
-            print(f"🔍 DEBUG: ref_speech shape = {ref_speech.shape}, device = {ref_speech.device}")
-            
+            # ✅ CORRECTO: Pasar la RUTA DEL ARCHIVO (string), NO el tensor.
+            # CosyVoice llama internamente a load_wav(ruta, 16000) para procesarlo.
             output_generator = self._model.inference_zero_shot(
-                text, prompt_text, ref_speech, stream=False
+                text, prompt_text, str(ref_audio_path), stream=False
             )
             
             for out_dict in output_generator:
                 speech = out_dict['tts_speech']
-                print(f"🔍 DEBUG: Generated speech shape = {speech.shape}")
                 
                 # Asegurar formato correcto [canales, muestras]
                 if speech.dim() == 3:
@@ -320,12 +313,12 @@ class LightTTSEngine:
                 if speech.dim() == 1:
                     speech = speech.unsqueeze(0)
                 
-                # Prevención del error de kernel size
+                # Prevención del error de kernel size (audio demasiado corto)
                 if speech.shape[-1] < 1000:
                     raise SynthesisError(
                         f"El modelo generó un audio inválido (longitud: {speech.shape[-1]} muestras). "
-                        "Esto suele ocurrir si el texto tiene caracteres extraños, está vacío, o hay un fallo en la inferencia. "
-                        "Prueba con un texto más simple (ej: 'Hola, esto es una prueba de voz')."
+                        "Esto suele ocurrir si el texto es demasiado corto, tiene caracteres extraños, "
+                        "o la transcripción no coincide con el audio de referencia."
                     )
 
                 if speed != 1.0:
