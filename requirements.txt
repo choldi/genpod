@@ -7,5 +7,5 @@ torchaudio==2.3.0
 python-multipart==0.0.9
 rich==13.7.0
 # CosyVoice 3 - install from GitHub (not on PyPI)
-pip install git+https://github.com/QwenAudio/CosyVoice.git
+git+https://github.com/QwenAudio/CosyVoice.git@main
 numpy
