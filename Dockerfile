@@ -45,7 +45,9 @@ FROM nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 
-# CORRECCIÓN: libsox3 es el nombre correcto en Ubuntu 22.04
+# CORRECCIÓN: 
+# 1. libsox3 es el nombre correcto en Ubuntu 22.04
+# 2. cuda-nvcc-12-1 se añade porque transformers/modelscope busca el binario nvcc al iniciar
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3.10 \
     python3-pip \
@@ -53,6 +55,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libsndfile1 \
     libsox3 \
     sox \
+    cuda-nvcc-12-1 \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
