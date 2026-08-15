@@ -62,10 +62,13 @@ COSYVOICE3_STYLE_TAGS = {
 MAX_PROMPT_CHARS = 50
 # Maximum length for each synthesis chunk (increased significantly for better context)
 MAX_CHUNK_CHARS = 1000
-# Minimum text length to trigger chunking (avoid unnecessary chunking)
-MIN_CHUNK_THRESHOLD = 1500
+# Minimum text length to trigger chunking (INCREASED DRAMATICALLY - CosyVoice 2/3 handles long texts well)
+MIN_CHUNK_THRESHOLD = 5000
 # Minimum valid audio length in samples (0.1s at 24kHz)
 MIN_AUDIO_SAMPLES = 2400
+# Silence duration between chunks (seconds)
+CHUNK_SILENCE_DURATION = 0.15
+CHUNK_SILENCE_SAMPLES = int(24000 * CHUNK_SILENCE_DURATION)
 
 
 class LightTTSEngine:
@@ -380,7 +383,7 @@ class LightTTSEngine:
         if not any(prompt.endswith(p) for p in [".", "!", "?", "。", "！", "？"]):
             prompt += "."
 
-        # Append end-of-prompt token
+        # Append end-of-prompt token (critical for preventing hallucination)
         prompt += "<|endofprompt|>"
 
         return prompt
@@ -479,7 +482,15 @@ class LightTTSEngine:
         if not all_speech_chunks:
             raise SynthesisError("Model did not generate any audio for base voice")
 
-        speech = torch.cat(all_speech_chunks, dim=-1)
+        # Add small silence between chunks for natural pauses
+        silence = torch.zeros(1, CHUNK_SILENCE_SAMPLES)
+        final_chunks = []
+        for i, chunk in enumerate(all_speech_chunks):
+            final_chunks.append(chunk)
+            if i < len(all_speech_chunks) - 1:
+                final_chunks.append(silence)
+
+        speech = torch.cat(final_chunks, dim=-1)
         logger.debug(f"Final base audio: {speech.shape[-1] / 24000:.2f}s")
 
         if speed != 1.0:
@@ -514,24 +525,33 @@ class LightTTSEngine:
             if not any(target_text.endswith(p) for p in [".", "!", "?", "。", "！", "？"]):
                 target_text += "."
 
-            # For cloned voices, avoid chunking unless text is very long
-            # CosyVoice zero-shot should handle up to ~1500 chars in single shot
-            if len(target_text) <= MIN_CHUNK_THRESHOLD:
-                # Try streaming zero-shot inference for ALL model versions if available
-                if hasattr(self._model, 'inference_zero_shot') and callable(getattr(self._model, 'inference_zero_shot', None)):
+            # ALWAYS try streaming zero-shot FIRST for ANY text length
+            # CosyVoice streaming handles arbitrary length with context preservation
+            if hasattr(self._model, 'inference_zero_shot') and callable(getattr(self._model, 'inference_zero_shot', None)):
+                try:
                     return self._synthesize_cloned_segment_streaming(
                         target_text, prompt_text, str(ref_audio_path), speed, pitch
                     )
-                # Fallback to single-shot for the entire text
+                except Exception as e:
+                    logger.warning(f"Streaming zero-shot failed: {e}, trying single-shot")
+
+            # Fallback to single-shot for the entire text (no chunking unless extremely long)
+            try:
                 return self._synthesize_cloned_segment_single_shot(
                     target_text, prompt_text, str(ref_audio_path), speed, pitch
                 )
-            else:
-                # Text is very long, use chunked synthesis as last resort
-                logger.warning(f"Text length {len(target_text)} exceeds threshold, using chunked synthesis")
+            except Exception as e:
+                logger.warning(f"Single-shot synthesis failed: {e}")
+
+            # LAST RESORT: Only chunk if text is extremely long (>5000 chars)
+            if len(target_text) > MIN_CHUNK_THRESHOLD:
+                logger.warning(f"Text length {len(target_text)} exceeds {MIN_CHUNK_THRESHOLD}, using chunked synthesis as last resort")
                 return self._synthesize_cloned_segment_chunked(
                     target_text, prompt_text, str(ref_audio_path), speed, pitch
                 )
+            else:
+                # If not extremely long but both methods failed, re-raise
+                raise SynthesisError("All synthesis methods failed for cloned voice")
 
         except VoiceNotFoundError:
             raise
@@ -553,7 +573,7 @@ class LightTTSEngine:
         try:
             logger.debug(f"Streaming zero-shot synthesis ({self._model_version}): '{target_text[:60]}...'")
 
-            # Try streaming first
+            # Try streaming first - this maintains context for long texts
             output_generator = self._model.inference_zero_shot(
                 target_text, prompt_text, ref_audio_path, stream=True
             )
@@ -581,11 +601,8 @@ class LightTTSEngine:
             return self._tensor_to_wav_bytes(speech)
 
         except Exception as e:
-            logger.warning(f"Streaming zero-shot failed, falling back to single-shot: {e}")
-            # Fallback to single-shot for the entire text (not chunked)
-            return self._synthesize_cloned_segment_single_shot(
-                target_text, prompt_text, ref_audio_path, speed, pitch
-            )
+            logger.warning(f"Streaming zero-shot failed: {e}")
+            raise
 
     def _synthesize_cloned_segment_single_shot(
         self,
@@ -626,10 +643,8 @@ class LightTTSEngine:
             return self._tensor_to_wav_bytes(speech)
 
         except Exception as e:
-            logger.warning(f"Single-shot synthesis failed, falling back to chunked: {e}")
-            return self._synthesize_cloned_segment_chunked(
-                target_text, prompt_text, ref_audio_path, speed, pitch
-            )
+            logger.warning(f"Single-shot synthesis failed: {e}")
+            raise
 
     def _synthesize_cloned_segment_chunked(
         self,
@@ -639,10 +654,14 @@ class LightTTSEngine:
         speed: float,
         pitch: float,
     ) -> bytes:
-        """Synthesize cloned voice by chunks (last resort for very long texts)."""
+        """Synthesize cloned voice by chunks (LAST RESORT for extremely long texts).
+        
+        CRITICAL: Each chunk uses FULL prompt_text + prompt_audio to prevent hallucination.
+        Adds silence between chunks for natural pauses.
+        """
         # Split into manageable chunks with larger size for better context
         text_chunks = self._split_text_into_chunks(target_text, max_chars=MAX_CHUNK_CHARS)
-        logger.debug(f"Cloned voice: text split into {len(text_chunks)} chunks (fallback)")
+        logger.debug(f"Cloned voice: text split into {len(text_chunks)} chunks (LAST RESORT)")
 
         all_speech_chunks: List[torch.Tensor] = []
 
@@ -653,9 +672,10 @@ class LightTTSEngine:
             if not any(chunk.endswith(p) for p in [".", "!", "?", "。", "！", "？"]):
                 chunk += "."
 
-            # For first chunk, use full prompt; for subsequent chunks, use minimal prompt to reduce hallucination
-            # This is a workaround - ideally the model would support continuation without prompt
-            current_prompt = prompt_text if idx == 0 else "<|endofprompt|>"
+            # CRITICAL FIX: Use FULL prompt_text for EVERY chunk to maintain voice consistency
+            # and prevent hallucination of prompt text. The model needs the complete
+            # prompt context for each zero-shot inference.
+            current_prompt = prompt_text
 
             output_generator = self._model.inference_zero_shot(
                 chunk, current_prompt, ref_audio_path, stream=False
@@ -681,7 +701,15 @@ class LightTTSEngine:
         if not all_speech_chunks:
             raise SynthesisError("Model did not generate any audio for cloned voice")
 
-        speech = torch.cat(all_speech_chunks, dim=-1)
+        # Add silence between chunks for natural pauses
+        silence = torch.zeros(1, CHUNK_SILENCE_SAMPLES)
+        final_chunks = []
+        for i, chunk in enumerate(all_speech_chunks):
+            final_chunks.append(chunk)
+            if i < len(all_speech_chunks) - 1:
+                final_chunks.append(silence)
+
+        speech = torch.cat(final_chunks, dim=-1)
         logger.debug(f"Final cloned audio: {speech.shape[-1] / 24000:.2f}s")
 
         if speed != 1.0:
