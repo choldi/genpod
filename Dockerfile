@@ -19,9 +19,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     sox \
     && rm -rf /var/lib/apt/lists/*
 
-RUN ln -s /usr/bin/python3.10 /usr/bin/python3 && \
-    ln -s /usr/bin/pip3 /usr/bin/pip
-
 WORKDIR /app
 
 COPY requirements.txt .
