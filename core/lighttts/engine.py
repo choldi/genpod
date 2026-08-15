@@ -298,8 +298,24 @@ class LightTTSEngine:
         try:
             prompt_text = metadata.get("transcript", "")
             
-            # ✅ CORRECTO: Pasar la RUTA DEL ARCHIVO (string), NO el tensor.
-            # CosyVoice llama internamente a load_wav(ruta, 16000) para procesarlo.
+            # 🔍 LOGS DE DEPURACIÓN
+            print(f"\n{'='*60}")
+            print(f"🔍 SYNTHESIS DEBUG")
+            print(f"{'='*60}")
+            print(f"Voice ID: {voice_id}")
+            print(f"Target text: '{text}'")
+            print(f"Prompt text: '{prompt_text}'")
+            print(f"Reference audio: {ref_audio_path}")
+            
+            # Verificar formato del audio de referencia
+            try:
+                info = torchaudio.info(str(ref_audio_path))
+                print(f"Audio info: {info.sample_rate}Hz, {info.num_channels} channels, {info.num_frames/info.sample_rate:.2f}s")
+            except Exception as e:
+                print(f"⚠️  Error reading audio info: {e}")
+            
+            print(f"{'='*60}\n")
+            
             output_generator = self._model.inference_zero_shot(
                 text, prompt_text, str(ref_audio_path), stream=False
             )
@@ -307,19 +323,32 @@ class LightTTSEngine:
             for out_dict in output_generator:
                 speech = out_dict['tts_speech']
                 
+                print(f"🔍 Generated speech shape: {speech.shape}")
+                print(f"🔍 Generated speech dtype: {speech.dtype}")
+                print(f"🔍 Generated speech device: {speech.device}")
+                print(f"🔍 Generated speech min/max: {speech.min().item():.4f} / {speech.max().item():.4f}")
+                
                 # Asegurar formato correcto [canales, muestras]
                 if speech.dim() == 3:
                     speech = speech.squeeze(0)
                 if speech.dim() == 1:
                     speech = speech.unsqueeze(0)
                 
-                # Prevención del error de kernel size (audio demasiado corto)
+                print(f"🔍 After reshape: {speech.shape}")
+                
+                # Si el audio es demasiado corto, el vocoder fallará
                 if speech.shape[-1] < 1000:
-                    raise SynthesisError(
+                    error_msg = (
                         f"El modelo generó un audio inválido (longitud: {speech.shape[-1]} muestras). "
-                        "Esto suele ocurrir si el texto es demasiado corto, tiene caracteres extraños, "
-                        "o la transcripción no coincide con el audio de referencia."
+                        f"Esto indica que CosyVoice 3 no pudo procesar la combinación de texto y audio de referencia.\n"
+                        f"Posibles causas:\n"
+                        f"1. La transcripción no coincide exactamente con el audio\n"
+                        f"2. El audio de referencia tiene problemas de formato\n"
+                        f"3. El texto contiene caracteres que el tokenizador no puede procesar\n"
+                        f"4. El audio es demasiado corto o muy largo"
                     )
+                    print(f"❌ ERROR: {error_msg}")
+                    raise SynthesisError(error_msg)
 
                 if speed != 1.0:
                     speech = torchaudio.functional.resample(speech, int(24000 * speed), 24000)
@@ -338,14 +367,17 @@ class LightTTSEngine:
                     if os.path.exists(tmp_path):
                         os.remove(tmp_path)
                 
+                print(f"✅ Synthesis successful: {len(audio_bytes)} bytes")
                 return audio_bytes
             
+            print(f"❌ No output generated from model")
             return b""
         except VoiceNotFoundError:
             raise
         except SynthesisError:
             raise
         except Exception as e:
+            print(f"❌ Exception: {type(e).__name__}: {e}")
             raise SynthesisError(f"Cloned voice synthesis failed: {e}") from e
 
     def clone_voice(
