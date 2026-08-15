@@ -2,11 +2,10 @@
 
 import os
 import re
-import uuid
-import shutil
+import logging
 import tempfile
 from pathlib import Path
-from typing import Generator, Optional, List, Dict, Any
+from typing import Generator, List, Dict, Any
 import torch
 import torchaudio
 
@@ -20,6 +19,8 @@ from core.exceptions import (
 )
 from core.lighttts.voice_manager import VoiceManager
 from cosyvoice.cli.cosyvoice import CosyVoice, CosyVoice2
+
+logger = logging.getLogger(__name__)
 
 # Mapping from simple API aliases to actual CosyVoice speaker IDs
 VOICE_ALIAS_MAP = {
@@ -44,26 +45,33 @@ EMOTION_PRESETS = {
     "<neutral>":    {"speed": 1.00, "pitch": 1.00},
 }
 
+# Maximum length for prompt text to avoid model reproducing it
+MAX_PROMPT_CHARS = 50
+# Maximum length for each synthesis chunk
+MAX_CHUNK_CHARS = 100
+# Minimum valid audio length in samples (0.1s at 24kHz)
+MIN_AUDIO_SAMPLES = 2400
+
 
 class LightTTSEngine:
     """Main wrapper class for CosyVoice 2 operations."""
 
-    def __init__(self, models_path: str, voices_path: str, device: str = "cpu"):
+    def __init__(self, models_path: str, voices_path: str, device: str = "cpu") -> None:
         """Initialize the CosyVoice 2 model."""
         self.models_path = Path(models_path)
         self.voices_path = Path(voices_path)
         self.device = self._resolve_device(device)
-        self._model = None
+        self._model: Optional[CosyVoice | CosyVoice2] = None
         self._voice_manager = VoiceManager(str(self.voices_path))
         self._load_model()
 
     def _resolve_device(self, device: str) -> str:
         """Resolve the actual device to use based on availability."""
         if device == "cuda" and not torch.cuda.is_available():
-            print("CUDA requested but not available, falling back to CPU")
+            logger.warning("CUDA requested but not available, falling back to CPU")
             return "cpu"
         if device == "mps" and not torch.backends.mps.is_available():
-            print("MPS requested but not available, falling back to CPU")
+            logger.warning("MPS requested but not available, falling back to CPU")
             return "cpu"
         return device
 
@@ -75,40 +83,20 @@ class LightTTSEngine:
 
             self._load_wav = load_wav
 
-            # Detectar automáticamente la versión del modelo por el archivo yaml presente
-            model_dir = None
-            if (self.models_path / "CosyVoice3-0.5B" / "cosyvoice3.yaml").exists():
-                model_dir = self.models_path / "CosyVoice3-0.5B"
-            elif (self.models_path / "CosyVoice2-0.5B" / "cosyvoice2.yaml").exists():
-                model_dir = self.models_path / "CosyVoice2-0.5B"
-            elif (self.models_path / "CosyVoice-300M-SFT" / "cosyvoice.yaml").exists():
-                model_dir = self.models_path / "CosyVoice-300M-SFT"
-            else:
-                # Fallback: buscar cualquier carpeta que empiece por CosyVoice
-                model_dirs = list(self.models_path.glob("CosyVoice*"))
-                if model_dirs:
-                    model_dir = model_dirs[0]
-                else:
-                    raise ModelLoadError(
-                        f"No CosyVoice model found in {self.models_path}. "
-                        "Please download the model weights first."
-                    )
+            model_dir = self._detect_model_dir()
+            logger.info(f"Loading model from {model_dir} on {self.device}...")
 
-            print(f"Loading model from {model_dir} on {self.device}...")
-            
-            # Inicializar la clase correcta según la versión detectada
             if (model_dir / "cosyvoice3.yaml").exists():
-                print("✅ Detected CosyVoice 3 model (Optimized for multilingual in-the-wild synthesis)")
-                # CosyVoice3 no usa el parámetro load_jit
+                logger.info("Detected CosyVoice 3 model")
                 self._model = CosyVoice3(str(model_dir), fp16=(self.device == "cuda"))
             elif (model_dir / "cosyvoice2.yaml").exists():
-                print("✅ Detected CosyVoice 2 model")
+                logger.info("Detected CosyVoice 2 model")
                 self._model = CosyVoice2(str(model_dir), load_jit=False, fp16=(self.device == "cuda"))
             else:
-                print("✅ Detected CosyVoice v1 (SFT) model")
+                logger.info("Detected CosyVoice v1 (SFT) model")
                 self._model = CosyVoice(str(model_dir), load_jit=False, fp16=(self.device == "cuda"))
-            
-            print("Model loaded successfully!")
+
+            logger.info("Model loaded successfully")
 
         except ImportError as e:
             raise ModelLoadError(
@@ -118,12 +106,29 @@ class LightTTSEngine:
         except Exception as e:
             raise ModelLoadError(f"Failed to load CosyVoice model: {e}") from e
 
+    def _detect_model_dir(self) -> Path:
+        """Detect which CosyVoice model version is available."""
+        if (self.models_path / "CosyVoice3-0.5B" / "cosyvoice3.yaml").exists():
+            return self.models_path / "CosyVoice3-0.5B"
+        if (self.models_path / "CosyVoice2-0.5B" / "cosyvoice2.yaml").exists():
+            return self.models_path / "CosyVoice2-0.5B"
+        if (self.models_path / "CosyVoice-300M-SFT" / "cosyvoice.yaml").exists():
+            return self.models_path / "CosyVoice-300M-SFT"
+
+        model_dirs = list(self.models_path.glob("CosyVoice*"))
+        if model_dirs:
+            return model_dirs[0]
+
+        raise ModelLoadError(
+            f"No CosyVoice model found in {self.models_path}. "
+            "Please download the model weights first."
+        )
+
     def list_voices(self) -> List[Dict[str, Any]]:
         """Scan and return all available voices (base and cloned)."""
-        voices = []
+        voices: List[Dict[str, Any]] = []
 
-        cloned_voices = self._voice_manager.list_voices()
-        for voice in cloned_voices:
+        for voice in self._voice_manager.list_voices():
             voices.append({
                 "voice_id": voice.get("voice_id", ""),
                 "name": voice.get("name", "Unknown"),
@@ -140,7 +145,7 @@ class LightTTSEngine:
             ("ja_female", "ja", "Base Japanese Female"),
             ("ko_female", "ko", "Base Korean Female"),
         ]
-        
+
         for alias, lang, name in known_base_voices:
             voices.append({
                 "voice_id": alias,
@@ -154,16 +159,16 @@ class LightTTSEngine:
 
     def _parse_emotion_tags(self, text: str) -> List[Dict[str, Any]]:
         """Parse emotion tags from text and return segments with their presets."""
-        segments = []
+        segments: List[Dict[str, Any]] = []
         current_emotion = "<neutral>"
-        
+
         pattern = r'(<(?:' + '|'.join(tag.strip('<>') for tag in EMOTION_PRESETS.keys()) + r')>)'
         parts = re.split(pattern, text)
-        
+
         for part in parts:
             if not part.strip():
                 continue
-            
+
             if part in EMOTION_PRESETS:
                 current_emotion = part
             else:
@@ -173,82 +178,108 @@ class LightTTSEngine:
                     "speed": preset["speed"],
                     "pitch": preset["pitch"],
                 })
-        
+
         return segments if segments else [{"text": text, "speed": 1.0, "pitch": 1.0}]
 
     def _apply_pitch_shift(self, waveform: torch.Tensor, pitch_factor: float) -> torch.Tensor:
         """Apply pitch shifting to audio waveform."""
         if pitch_factor == 1.0:
             return waveform
-        
+
         effects = [
             ["pitch", str(pitch_factor * 100)],
             ["rate", "24000"],
         ]
-        
+
         try:
             shifted, _ = torchaudio.sox_effects.apply_effects_tensor(
                 waveform, 24000, effects
             )
             return shifted
         except Exception:
+            logger.warning("Pitch shift failed, returning original waveform")
             return waveform
 
+    def _is_cloned_voice(self, voice_id: str) -> bool:
+        """Check if a voice ID corresponds to a cloned voice."""
+        try:
+            meta = self._voice_manager.load_voice_metadata(voice_id)
+            return bool(meta and meta.get("is_cloned"))
+        except FileNotFoundError:
+            return False
+        except Exception:
+            return False
+
     def synthesize(
-        self, text: str, voice_id: str, lang: str = "en", stream: bool = True,
-        speed: float = 1.0, pitch: float = 1.0, emotion: str = "neutral",
-        emotion_tags: bool = False
+        self,
+        text: str,
+        voice_id: str,
+        lang: str = "en",
+        stream: bool = True,
+        speed: float = 1.0,
+        pitch: float = 1.0,
+        emotion: str = "neutral",
+        emotion_tags: bool = False,
     ) -> Generator[bytes, None, None]:
         """Generate audio chunks for the given text and voice."""
         if not self._model:
             raise SynthesisError("Model not loaded")
-        
+
         try:
-            is_cloned = False
-            try:
-                meta = self._voice_manager.load_voice_metadata(voice_id)
-                if meta and meta.get("is_cloned"):
-                    is_cloned = True
-                    ref_audio_path = self.voices_path / f"{voice_id}.wav"
-                    if not ref_audio_path.exists():
-                        raise VoiceNotFoundError(f"Reference audio for voice '{voice_id}' not found")
-            except FileNotFoundError:
-                pass
-            except VoiceNotFoundError:
-                raise
-            except Exception:
-                pass
+            is_cloned = self._is_cloned_voice(voice_id)
+
+            if is_cloned:
+                ref_audio_path = self.voices_path / f"{voice_id}.wav"
+                if not ref_audio_path.exists():
+                    raise VoiceNotFoundError(f"Reference audio for voice '{voice_id}' not found")
 
             if emotion_tags:
                 segments = self._parse_emotion_tags(text)
             else:
                 segments = [{"text": text, "speed": speed, "pitch": pitch}]
-            
+
             for segment in segments:
                 seg_text = segment["text"]
                 seg_speed = segment["speed"]
                 seg_pitch = segment["pitch"]
-                
+
                 if not seg_text:
                     continue
-                
+
                 if is_cloned:
-                    audio_bytes = self._synthesize_cloned_segment(seg_text, voice_id, seg_speed, seg_pitch, lang)
+                    audio_bytes = self._synthesize_cloned_segment(
+                        seg_text, voice_id, seg_speed, seg_pitch, lang
+                    )
                 else:
                     actual_spk_id = VOICE_ALIAS_MAP.get(voice_id, voice_id)
-                    audio_bytes = self._synthesize_base_segment(seg_text, actual_spk_id, seg_speed, seg_pitch)
-                
+                    audio_bytes = self._synthesize_base_segment(
+                        seg_text, actual_spk_id, seg_speed, seg_pitch
+                    )
+
                 if stream:
                     chunk_size = 4096
                     for i in range(0, len(audio_bytes), chunk_size):
                         yield audio_bytes[i:i + chunk_size]
                 else:
                     yield audio_bytes
-                    
+
         except VoiceNotFoundError:
             raise
         except Exception as e:
             raise SynthesisError(f"Synthesis failed: {e}") from e
+
+    def _tensor_to_wav_bytes(self, speech: torch.Tensor) -> bytes:
+        """Convert a speech tensor to WAV bytes."""
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
+            tmp_path = tmp_file.name
+
+        try:
+            torchaudio.save(tmp_path, speech, 24000, format="wav")
+            with open(tmp_path, "rb") as f:
+                return f.read()
+        finally:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
 
     def _synthesize_base_segment(
         self, text: str, spk_id: str, speed: float, pitch: float
@@ -256,180 +287,165 @@ class LightTTSEngine:
         """Synthesize a single segment using base voice and return bytes."""
         try:
             output_generator = self._model.inference_sft(text, spk_id, stream=False)
-            
-            all_speech_chunks = []
+
+            all_speech_chunks: List[torch.Tensor] = []
             for out_dict in output_generator:
                 speech = out_dict['tts_speech']
                 if speech.dim() == 3:
                     speech = speech.squeeze(0)
                 all_speech_chunks.append(speech.cpu())
-            
+
             if not all_speech_chunks:
                 return b""
-                
-            # Concatenar todos los fragmentos en un solo tensor de audio
+
             speech = torch.cat(all_speech_chunks, dim=-1)
-            
+
             if speed != 1.0:
                 speech = torchaudio.functional.resample(speech, int(24000 * speed), 24000)
-            
+
             if pitch != 1.0:
                 speech = self._apply_pitch_shift(speech, pitch)
-            
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
-                tmp_path = tmp_file.name
-            
-            try:
-                torchaudio.save(tmp_path, speech, 24000, format="wav")
-                with open(tmp_path, "rb") as f:
-                    audio_bytes = f.read()
-            finally:
-                if os.path.exists(tmp_path):
-                    os.remove(tmp_path)
-            
-            return audio_bytes
+
+            return self._tensor_to_wav_bytes(speech)
+
         except Exception as e:
             raise SynthesisError(f"Base voice synthesis failed: {e}") from e
 
-
-    def _split_text_into_chunks(self, text: str, max_chars: int = 200) -> List[str]:
+    def _split_text_into_chunks(self, text: str, max_chars: int = MAX_CHUNK_CHARS) -> List[str]:
         """Split text into chunks based on sentence boundaries."""
-        import re
-        
-        # Dividir por signos de puntuación que marcan fin de frase
         sentences = re.split(r'(?<=[.!?。！？])\s+', text)
-        
-        chunks = []
+
+        chunks: List[str] = []
         current_chunk = ""
-        
+
         for sentence in sentences:
-            # Si añadir esta frase excede el límite, guardar el chunk actual
             if len(current_chunk) + len(sentence) > max_chars and current_chunk:
                 chunks.append(current_chunk.strip())
                 current_chunk = sentence
             else:
                 current_chunk += (" " if current_chunk else "") + sentence
-        
-        # Añadir el último chunk si no está vacío
+
         if current_chunk.strip():
             chunks.append(current_chunk.strip())
-        
+
         return chunks if chunks else [text]
 
+    def _prepare_prompt_text(self, transcript: str) -> str:
+        """Prepare the prompt text for zero-shot inference.
+
+        Truncates the transcript to avoid the model reproducing it,
+        and appends the end-of-prompt token.
+        """
+        prompt = transcript.strip()
+
+        # Truncate to avoid model reproducing the prompt
+        if len(prompt) > MAX_PROMPT_CHARS:
+            prompt = prompt[:MAX_PROMPT_CHARS]
+
+        # Ensure ends with punctuation
+        if not any(prompt.endswith(p) for p in [".", "!", "?", "。", "！", "？"]):
+            prompt += "."
+
+        # Append end-of-prompt token
+        prompt += "<|endofprompt|>"
+
+        return prompt
+
     def _synthesize_cloned_segment(
-        self, text: str, voice_id: str, speed: float, pitch: float, language: str = "es"
+        self,
+        text: str,
+        voice_id: str,
+        speed: float,
+        pitch: float,
+        language: str = "es",
     ) -> bytes:
         """Synthesize a single segment using cloned voice and return bytes."""
         metadata = self._voice_manager.load_voice_metadata(voice_id)
         ref_audio_path = self.voices_path / f"{voice_id}.wav"
-        
+
         if not ref_audio_path.exists():
             raise VoiceNotFoundError(f"Reference audio for voice '{voice_id}' not found")
 
         try:
-            prompt_text = metadata.get("transcript", "").strip()
-            
-            # IMPORTANTE: Añadir <|endofprompt|> correctamente al prompt_text
-            # Primero asegurar que termina con puntuación
-            if not any(prompt_text.endswith(p) for p in [".", "!", "?", "。", "！", "？"]):
-                prompt_text += "."
-            # Luego añadir el token especial (sin espacios antes)
-            prompt_text += "<|endofprompt|>"
-            
-            # NO modificar el target_text, solo asegurar puntuación final
+            prompt_text = self._prepare_prompt_text(metadata.get("transcript", ""))
+
+            # Ensure target text ends with punctuation
             target_text = text.strip()
             if not any(target_text.endswith(p) for p in [".", "!", "?", "。", "！", "？"]):
                 target_text += "."
-            
-            print(f"🔍 DEBUG: prompt_text: '{prompt_text}'")
-            print(f"🔍 DEBUG: target_text: '{target_text[:80]}...'")
-            
-            # Dividir el texto en chunks manejables
-            text_chunks = self._split_text_into_chunks(target_text, max_chars=200)
-            print(f"🔍 DEBUG: Texto dividido en {len(text_chunks)} fragmentos")
-            
-            all_speech_chunks = []
-            
-            # Procesar cada chunk por separado
+
+            # Split into manageable chunks
+            text_chunks = self._split_text_into_chunks(target_text)
+            logger.debug(f"Text split into {len(text_chunks)} chunks for voice '{voice_id}'")
+
+            all_speech_chunks: List[torch.Tensor] = []
+
             for idx, chunk in enumerate(text_chunks):
-                print(f"🔊 Sintetizando fragmento {idx+1}/{len(text_chunks)}: '{chunk[:60]}...'")
-                
-                # Asegurar que el chunk termina con puntuación
+                logger.debug(f"Synthesizing chunk {idx + 1}/{len(text_chunks)}: '{chunk[:60]}...'")
+
+                # Ensure chunk ends with punctuation
                 if not any(chunk.endswith(p) for p in [".", "!", "?", "。", "！", "？"]):
                     chunk += "."
-                
-                # Llamar al modelo para este chunk específico
-                # IMPORTANTE: Usar el mismo prompt_text para todos los chunks
+
                 output_generator = self._model.inference_zero_shot(
                     chunk, prompt_text, str(ref_audio_path), stream=False
                 )
-                
-                # Capturar el audio generado para este chunk
-                chunk_speech = None
+
+                chunk_speech: Optional[torch.Tensor] = None
                 for out_dict in output_generator:
                     speech = out_dict['tts_speech']
                     if speech.dim() == 3:
                         speech = speech.squeeze(0)
                     if speech.dim() == 1:
                         speech = speech.unsqueeze(0)
-                    
-                    # Solo tomar el primer output (evitar duplicados)
+
                     if chunk_speech is None:
                         chunk_speech = speech.cpu()
-                    break  # Salir después del primer output
-                
-                if chunk_speech is not None and chunk_speech.shape[-1] > 1000:
+                    break
+
+                if chunk_speech is not None and chunk_speech.shape[-1] >= MIN_AUDIO_SAMPLES:
                     all_speech_chunks.append(chunk_speech)
-                    print(f"✅ Fragmento {idx+1} generado: {chunk_speech.shape[-1]/24000:.2f}s")
+                    logger.debug(f"Chunk {idx + 1} generated: {chunk_speech.shape[-1] / 24000:.2f}s")
                 else:
-                    print(f"⚠️  WARNING: Fragmento {idx+1} no generó audio válido")
-            
+                    logger.warning(f"Chunk {idx + 1} did not generate valid audio")
+
             if not all_speech_chunks:
-                raise SynthesisError("El modelo no generó ningún audio.")
-            
-            # Concatenar todos los fragmentos en un solo tensor de audio
+                raise SynthesisError("Model did not generate any audio")
+
             speech = torch.cat(all_speech_chunks, dim=-1)
-            
-            print(f"🎵 Audio final concatenado: {speech.shape[-1]/24000:.2f} segundos")
-            
+            logger.debug(f"Final audio: {speech.shape[-1] / 24000:.2f}s")
+
             if speed != 1.0:
                 speech = torchaudio.functional.resample(speech, int(24000 * speed), 24000)
-            
+
             if pitch != 1.0:
                 speech = self._apply_pitch_shift(speech, pitch)
-            
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
-                tmp_path = tmp_file.name
-            
-            try:
-                torchaudio.save(tmp_path, speech, 24000, format="wav")
-                with open(tmp_path, "rb") as f:
-                    audio_bytes = f.read()
-            finally:
-                if os.path.exists(tmp_path):
-                    os.remove(tmp_path)
-            
-            print(f"✅ Synthesis successful: {len(audio_bytes)} bytes")
-            return audio_bytes
-            
+
+            return self._tensor_to_wav_bytes(speech)
+
         except VoiceNotFoundError:
             raise
         except SynthesisError:
             raise
         except Exception as e:
-            print(f"❌ Exception: {type(e).__name__}: {e}")
+            logger.error(f"Cloned voice synthesis failed: {e}")
             raise SynthesisError(f"Cloned voice synthesis failed: {e}") from e
 
     def clone_voice(
-        self, audio_path: str, transcript: str, voice_name: str, language: str = "en"
+        self,
+        audio_path: str,
+        transcript: str,
+        voice_name: str,
+        language: str = "en",
     ) -> str:
         """Clone a voice from reference audio and transcript."""
         if not self._model:
             raise CloningError("Model not loaded")
+
         audio_path = Path(audio_path)
         if not audio_path.exists():
             raise CloningError(f"Reference audio not found: {audio_path}")
-        
+
         try:
             info = torchaudio.info(str(audio_path))
             duration = info.num_frames / info.sample_rate
@@ -438,17 +454,17 @@ class LightTTSEngine:
                     f"Reference audio too short: {duration:.1f}s. Minimum 3 seconds required."
                 )
             if duration > 30.0:
-                print(f"Warning: Reference audio is long ({duration:.1f}s). "
-                      "Consider using a shorter clip for better results.")
+                logger.warning(
+                    f"Reference audio is long ({duration:.1f}s). "
+                    "Consider using a shorter clip for better results."
+                )
         except AudioTooShortError:
             raise
         except Exception as e:
             raise CloningError(f"Failed to validate audio: {e}") from e
-        
-        voice_id = voice_name
-        voice_id_clean = re.sub(r'[^\w\-]', '_', voice_id)
-        voice_id = voice_id_clean[:32]
-        
+
+        voice_id = re.sub(r'[^\w\-]', '_', voice_name)[:32]
+
         dest_audio = self.voices_path / f"{voice_id}.wav"
         try:
             waveform, sr = torchaudio.load(str(audio_path))
@@ -458,7 +474,7 @@ class LightTTSEngine:
             torchaudio.save(str(dest_audio), waveform, 24000)
         except Exception as e:
             raise CloningError(f"Failed to process reference audio: {e}") from e
-        
+
         metadata = {
             "voice_id": voice_id,
             "name": voice_name,
@@ -471,4 +487,3 @@ class LightTTSEngine:
         }
         self._voice_manager.save_voice_metadata(voice_id, metadata)
         return voice_id
-
