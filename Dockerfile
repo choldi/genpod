@@ -24,10 +24,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Establecer enlaces simbólicos para python3 y pip3
-RUN ln -s /usr/bin/python3.10 /usr/bin/python3 && \
-    ln -s /usr/bin/pip3 /usr/bin/pip
-
 # Crear directorio de trabajo
 WORKDIR /app
 
