@@ -11,6 +11,7 @@ services:
       - DEVICE=${DEVICE:-cpu}
       - MODELS_PATH=/app/data/models
       - VOICES_PATH=/app/data/voices
+      - TRITON_CACHE_DIR=/tmp/.triton
     volumes:
       - ./data/models:/app/data/models
       - ./data/voices:/app/data/voices
