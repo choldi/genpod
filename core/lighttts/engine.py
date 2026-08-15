@@ -291,6 +291,31 @@ class LightTTSEngine:
         except Exception as e:
             raise SynthesisError(f"Base voice synthesis failed: {e}") from e
 
+
+    def _split_text_into_chunks(self, text: str, max_chars: int = 200) -> List[str]:
+        """Split text into chunks based on sentence boundaries."""
+        import re
+        
+        # Dividir por signos de puntuación que marcan fin de frase
+        sentences = re.split(r'(?<=[.!?。！？])\s+', text)
+        
+        chunks = []
+        current_chunk = ""
+        
+        for sentence in sentences:
+            # Si añadir esta frase excede el límite, guardar el chunk actual
+            if len(current_chunk) + len(sentence) > max_chars and current_chunk:
+                chunks.append(current_chunk.strip())
+                current_chunk = sentence
+            else:
+                current_chunk += (" " if current_chunk else "") + sentence
+        
+        # Añadir el último chunk si no está vacío
+        if current_chunk.strip():
+            chunks.append(current_chunk.strip())
+        
+        return chunks if chunks else [text]
+
     def _synthesize_cloned_segment(
         self, text: str, voice_id: str, speed: float, pitch: float, language: str = "es"
     ) -> bytes:
@@ -310,23 +335,35 @@ class LightTTSEngine:
                     prompt_text += "."
                 prompt_text += "<|endofprompt|>"
             
-            target_text = text.strip()
-            if not any(target_text.endswith(p) for p in [".", "!", "?", "。", "！", "？"]):
-                target_text += "."
-            
-            output_generator = self._model.inference_zero_shot(
-                target_text, prompt_text, str(ref_audio_path), stream=False
-            )
+            # Dividir el texto en chunks manejables
+            text_chunks = self._split_text_into_chunks(text, max_chars=200)
+            print(f"🔍 DEBUG: Texto dividido en {len(text_chunks)} fragmentos")
             
             all_speech_chunks = []
-            for out_dict in output_generator:
-                speech = out_dict['tts_speech']
-                if speech.dim() == 3:
-                    speech = speech.squeeze(0)
-                if speech.dim() == 1:
-                    speech = speech.unsqueeze(0)
+            
+            # Procesar cada chunk por separado
+            for idx, chunk in enumerate(text_chunks):
+                print(f"🔍 DEBUG: Procesando fragmento {idx+1}/{len(text_chunks)}: '{chunk[:50]}...'")
                 
-                all_speech_chunks.append(speech.cpu())
+                # Asegurar que el chunk termine en puntuación
+                if not any(chunk.endswith(p) for p in [".", "!", "?", "。", "！", "？"]):
+                    chunk += "."
+                
+                # Llamar al modelo para este chunk específico
+                output_generator = self._model.inference_zero_shot(
+                    chunk, prompt_text, str(ref_audio_path), stream=False
+                )
+                
+                # Capturar el audio generado para este chunk
+                for out_dict in output_generator:
+                    speech = out_dict['tts_speech']
+                    if speech.dim() == 3:
+                        speech = speech.squeeze(0)
+                    if speech.dim() == 1:
+                        speech = speech.unsqueeze(0)
+                    
+                    all_speech_chunks.append(speech.cpu())
+                    break  # Solo necesitamos el primer output de cada chunk
             
             if not all_speech_chunks:
                 raise SynthesisError("El modelo no generó ningún audio.")
