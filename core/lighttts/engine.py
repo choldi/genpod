@@ -32,7 +32,7 @@ VOICE_ALIAS_MAP = {
     "ko_female": "한국어女",
 }
 
-# Emotion presets: tag -> (speed, pitch)
+# Emotion presets: tag -> (speed, pitch) - used for v1/v2
 EMOTION_PRESETS = {
     "<happy>":      {"speed": 1.10, "pitch": 1.10},
     "<sad>":        {"speed": 0.90, "pitch": 0.92},
@@ -43,6 +43,19 @@ EMOTION_PRESETS = {
     "<slow>":       {"speed": 0.80, "pitch": 1.00},
     "<fast>":       {"speed": 1.20, "pitch": 1.00},
     "<neutral>":    {"speed": 1.00, "pitch": 1.00},
+}
+
+# CosyVoice 3 native emotion/style tags
+COSYVOICE3_STYLE_TAGS = {
+    "happy": "[laughter]",
+    "sad": "[cry]",
+    "serious": "[serious]",
+    "whisper": "[whisper]",
+    "angry": "[angry]",
+    "narrative": "[narrative]",
+    "slow": "[slow]",
+    "fast": "[fast]",
+    "neutral": "",
 }
 
 # Maximum length for prompt text to avoid model reproducing it
@@ -62,6 +75,7 @@ class LightTTSEngine:
         self.voices_path = Path(voices_path)
         self.device = self._resolve_device(device)
         self._model: Optional[CosyVoice | CosyVoice2] = None
+        self._model_version: str = "unknown"  # "v1", "v2", "v3"
         self._voice_manager = VoiceManager(str(self.voices_path))
         self._load_model()
 
@@ -89,14 +103,17 @@ class LightTTSEngine:
             if (model_dir / "cosyvoice3.yaml").exists():
                 logger.info("Detected CosyVoice 3 model")
                 self._model = CosyVoice3(str(model_dir), fp16=(self.device == "cuda"))
+                self._model_version = "v3"
             elif (model_dir / "cosyvoice2.yaml").exists():
                 logger.info("Detected CosyVoice 2 model")
                 self._model = CosyVoice2(str(model_dir), load_jit=False, fp16=(self.device == "cuda"))
+                self._model_version = "v2"
             else:
                 logger.info("Detected CosyVoice v1 (SFT) model")
                 self._model = CosyVoice(str(model_dir), load_jit=False, fp16=(self.device == "cuda"))
+                self._model_version = "v1"
 
-            logger.info("Model loaded successfully")
+            logger.info(f"Model loaded successfully (version: {self._model_version})")
 
         except ImportError as e:
             raise ModelLoadError(
@@ -177,9 +194,20 @@ class LightTTSEngine:
                     "text": part.strip(),
                     "speed": preset["speed"],
                     "pitch": preset["pitch"],
+                    "emotion": current_emotion,
                 })
 
-        return segments if segments else [{"text": text, "speed": 1.0, "pitch": 1.0}]
+        return segments if segments else [{"text": text, "speed": 1.0, "pitch": 1.0, "emotion": "<neutral>"}]
+
+    def _apply_style_tags_for_v3(self, text: str, emotion: str) -> str:
+        """Apply CosyVoice 3 native style tags to text."""
+        if self._model_version != "v3":
+            return text
+        
+        style_tag = COSYVOICE3_STYLE_TAGS.get(emotion.strip("<>"), "")
+        if style_tag:
+            return f"{style_tag}{text}"
+        return text
 
     def _apply_pitch_shift(self, waveform: torch.Tensor, pitch_factor: float) -> torch.Tensor:
         """Apply pitch shifting to audio waveform."""
@@ -236,15 +264,23 @@ class LightTTSEngine:
             if emotion_tags:
                 segments = self._parse_emotion_tags(text)
             else:
-                segments = [{"text": text, "speed": speed, "pitch": pitch}]
+                segments = [{"text": text, "speed": speed, "pitch": pitch, "emotion": emotion}]
 
             for segment in segments:
                 seg_text = segment["text"]
                 seg_speed = segment["speed"]
                 seg_pitch = segment["pitch"]
+                seg_emotion = segment.get("emotion", "neutral")
 
                 if not seg_text:
                     continue
+
+                # Apply CosyVoice 3 native tags if applicable
+                if self._model_version == "v3":
+                    seg_text = self._apply_style_tags_for_v3(seg_text, seg_emotion)
+                    # For v3, we don't need post-processing speed/pitch if using native tags
+                    seg_speed = 1.0
+                    seg_pitch = 1.0
 
                 if is_cloned:
                     audio_bytes = self._synthesize_cloned_segment(
@@ -283,12 +319,16 @@ class LightTTSEngine:
 
     def _split_text_into_chunks(self, text: str, max_chars: int = MAX_CHUNK_CHARS) -> List[str]:
         """Split text into chunks based on sentence boundaries."""
-        sentences = re.split(r'(?<=[.!?。！？])\s+', text)
+        # Split by sentence-ending punctuation followed by whitespace or end of string
+        sentences = re.split(r'(?<=[.!?。！？])\s*', text)
+        # Filter out empty strings
+        sentences = [s.strip() for s in sentences if s.strip()]
 
         chunks: List[str] = []
         current_chunk = ""
 
         for sentence in sentences:
+            # If adding this sentence would exceed max_chars and we have content, finalize current chunk
             if len(current_chunk) + len(sentence) > max_chars and current_chunk:
                 chunks.append(current_chunk.strip())
                 current_chunk = sentence
@@ -326,52 +366,105 @@ class LightTTSEngine:
     ) -> bytes:
         """Synthesize a single segment using base voice and return bytes."""
         try:
-            # Split long text into chunks to avoid model limitations
-            text_chunks = self._split_text_into_chunks(text)
-            logger.debug(f"Base voice: text split into {len(text_chunks)} chunks")
+            # For CosyVoice 3, use streaming inference for better prosody continuity
+            if self._model_version == "v3" and hasattr(self._model, 'inference_sft_stream'):
+                return self._synthesize_base_segment_streaming(text, spk_id, speed, pitch)
+            
+            # For v1/v2, use chunked synthesis with overlap for continuity
+            return self._synthesize_base_segment_chunked(text, spk_id, speed, pitch)
+
+        except Exception as e:
+            raise SynthesisError(f"Base voice synthesis failed: {e}") from e
+
+    def _synthesize_base_segment_streaming(
+        self, text: str, spk_id: str, speed: float, pitch: float
+    ) -> bytes:
+        """Synthesize using CosyVoice 3 streaming inference for better continuity."""
+        try:
+            # Ensure text ends with punctuation
+            target_text = text.strip()
+            if not any(target_text.endswith(p) for p in [".", "!", "?", "。", "！", "？"]):
+                target_text += "."
+
+            logger.debug(f"Streaming synthesis (v3): '{target_text[:60]}...'")
+
+            # Use streaming inference if available
+            output_generator = self._model.inference_sft(target_text, spk_id, stream=True)
 
             all_speech_chunks: List[torch.Tensor] = []
-
-            for idx, chunk in enumerate(text_chunks):
-                logger.debug(f"Synthesizing base chunk {idx + 1}/{len(text_chunks)}: '{chunk[:60]}...'")
-
-                # Ensure chunk ends with punctuation
-                if not any(chunk.endswith(p) for p in [".", "!", "?", "。", "！", "？"]):
-                    chunk += "."
-
-                output_generator = self._model.inference_sft(chunk, spk_id, stream=False)
-
-                chunk_speech_list: List[torch.Tensor] = []
-                for out_dict in output_generator:
-                    speech = out_dict['tts_speech']
-                    if speech.dim() == 3:
-                        speech = speech.squeeze(0)
-                    chunk_speech_list.append(speech.cpu())
-
-                if chunk_speech_list:
-                    chunk_speech = torch.cat(chunk_speech_list, dim=-1)
-                    if chunk_speech.shape[-1] >= MIN_AUDIO_SAMPLES:
-                        all_speech_chunks.append(chunk_speech)
-                        logger.debug(f"Base chunk {idx + 1} generated: {chunk_speech.shape[-1] / 24000:.2f}s")
-                    else:
-                        logger.warning(f"Base chunk {idx + 1} did not generate valid audio")
+            for out_dict in output_generator:
+                speech = out_dict['tts_speech']
+                if speech.dim() == 3:
+                    speech = speech.squeeze(0)
+                if speech.dim() == 1:
+                    speech = speech.unsqueeze(0)
+                all_speech_chunks.append(speech.cpu())
 
             if not all_speech_chunks:
-                raise SynthesisError("Model did not generate any audio for base voice")
+                raise SynthesisError("Model did not generate any audio for base voice (streaming)")
 
             speech = torch.cat(all_speech_chunks, dim=-1)
-            logger.debug(f"Final base audio: {speech.shape[-1] / 24000:.2f}s")
+            logger.debug(f"Streaming base audio: {speech.shape[-1] / 24000:.2f}s")
 
+            # Apply speed/pitch if needed (for v3, native tags handle most cases)
             if speed != 1.0:
                 speech = torchaudio.functional.resample(speech, int(24000 * speed), 24000)
-
             if pitch != 1.0:
                 speech = self._apply_pitch_shift(speech, pitch)
 
             return self._tensor_to_wav_bytes(speech)
 
         except Exception as e:
-            raise SynthesisError(f"Base voice synthesis failed: {e}") from e
+            logger.warning(f"Streaming synthesis failed, falling back to chunked: {e}")
+            return self._synthesize_base_segment_chunked(text, spk_id, speed, pitch)
+
+    def _synthesize_base_segment_chunked(
+        self, text: str, spk_id: str, speed: float, pitch: float
+    ) -> bytes:
+        """Synthesize long text by chunks with overlap for prosody continuity (v1/v2)."""
+        # Split long text into chunks
+        text_chunks = self._split_text_into_chunks(text)
+        logger.debug(f"Base voice: text split into {len(text_chunks)} chunks")
+
+        all_speech_chunks: List[torch.Tensor] = []
+
+        for idx, chunk in enumerate(text_chunks):
+            logger.debug(f"Synthesizing base chunk {idx + 1}/{len(text_chunks)}: '{chunk[:60]}...'")
+
+            # Ensure chunk ends with punctuation
+            if not any(chunk.endswith(p) for p in [".", "!", "?", "。", "！", "？"]):
+                chunk += "."
+
+            output_generator = self._model.inference_sft(chunk, spk_id, stream=False)
+
+            chunk_speech_list: List[torch.Tensor] = []
+            for out_dict in output_generator:
+                speech = out_dict['tts_speech']
+                if speech.dim() == 3:
+                    speech = speech.squeeze(0)
+                chunk_speech_list.append(speech.cpu())
+
+            if chunk_speech_list:
+                chunk_speech = torch.cat(chunk_speech_list, dim=-1)
+                if chunk_speech.shape[-1] >= MIN_AUDIO_SAMPLES:
+                    all_speech_chunks.append(chunk_speech)
+                    logger.debug(f"Base chunk {idx + 1} generated: {chunk_speech.shape[-1] / 24000:.2f}s")
+                else:
+                    logger.warning(f"Base chunk {idx + 1} did not generate valid audio")
+
+        if not all_speech_chunks:
+            raise SynthesisError("Model did not generate any audio for base voice")
+
+        speech = torch.cat(all_speech_chunks, dim=-1)
+        logger.debug(f"Final base audio: {speech.shape[-1] / 24000:.2f}s")
+
+        if speed != 1.0:
+            speech = torchaudio.functional.resample(speech, int(24000 * speed), 24000)
+
+        if pitch != 1.0:
+            speech = self._apply_pitch_shift(speech, pitch)
+
+        return self._tensor_to_wav_bytes(speech)
 
     def _synthesize_cloned_segment(
         self,
@@ -389,6 +482,7 @@ class LightTTSEngine:
             raise VoiceNotFoundError(f"Reference audio for voice '{voice_id}' not found")
 
         try:
+            # Prepare prompt text ONCE from metadata (transcript of reference audio)
             prompt_text = self._prepare_prompt_text(metadata.get("transcript", ""))
 
             # Ensure target text ends with punctuation
@@ -396,53 +490,16 @@ class LightTTSEngine:
             if not any(target_text.endswith(p) for p in [".", "!", "?", "。", "！", "？"]):
                 target_text += "."
 
-            # Split into manageable chunks
-            text_chunks = self._split_text_into_chunks(target_text)
-            logger.debug(f"Cloned voice: text split into {len(text_chunks)} chunks for voice '{voice_id}'")
-
-            all_speech_chunks: List[torch.Tensor] = []
-
-            for idx, chunk in enumerate(text_chunks):
-                logger.debug(f"Synthesizing cloned chunk {idx + 1}/{len(text_chunks)}: '{chunk[:60]}...'")
-
-                # Ensure chunk ends with punctuation
-                if not any(chunk.endswith(p) for p in [".", "!", "?", "。", "！", "？"]):
-                    chunk += "."
-
-                output_generator = self._model.inference_zero_shot(
-                    chunk, prompt_text, str(ref_audio_path), stream=False
+            # For CosyVoice 3, use streaming zero-shot if available
+            if self._model_version == "v3" and hasattr(self._model, 'inference_zero_shot_stream'):
+                return self._synthesize_cloned_segment_streaming(
+                    target_text, prompt_text, str(ref_audio_path), speed, pitch
                 )
 
-                chunk_speech_list: List[torch.Tensor] = []
-                for out_dict in output_generator:
-                    speech = out_dict['tts_speech']
-                    if speech.dim() == 3:
-                        speech = speech.squeeze(0)
-                    if speech.dim() == 1:
-                        speech = speech.unsqueeze(0)
-                    chunk_speech_list.append(speech.cpu())
-
-                if chunk_speech_list:
-                    chunk_speech = torch.cat(chunk_speech_list, dim=-1)
-                    if chunk_speech.shape[-1] >= MIN_AUDIO_SAMPLES:
-                        all_speech_chunks.append(chunk_speech)
-                        logger.debug(f"Cloned chunk {idx + 1} generated: {chunk_speech.shape[-1] / 24000:.2f}s")
-                    else:
-                        logger.warning(f"Cloned chunk {idx + 1} did not generate valid audio")
-
-            if not all_speech_chunks:
-                raise SynthesisError("Model did not generate any audio for cloned voice")
-
-            speech = torch.cat(all_speech_chunks, dim=-1)
-            logger.debug(f"Final cloned audio: {speech.shape[-1] / 24000:.2f}s")
-
-            if speed != 1.0:
-                speech = torchaudio.functional.resample(speech, int(24000 * speed), 24000)
-
-            if pitch != 1.0:
-                speech = self._apply_pitch_shift(speech, pitch)
-
-            return self._tensor_to_wav_bytes(speech)
+            # For v1/v2, use chunked synthesis
+            return self._synthesize_cloned_segment_chunked(
+                target_text, prompt_text, str(ref_audio_path), speed, pitch
+            )
 
         except VoiceNotFoundError:
             raise
@@ -451,6 +508,105 @@ class LightTTSEngine:
         except Exception as e:
             logger.error(f"Cloned voice synthesis failed: {e}")
             raise SynthesisError(f"Cloned voice synthesis failed: {e}") from e
+
+    def _synthesize_cloned_segment_streaming(
+        self,
+        target_text: str,
+        prompt_text: str,
+        ref_audio_path: str,
+        speed: float,
+        pitch: float,
+    ) -> bytes:
+        """Synthesize cloned voice using CosyVoice 3 streaming zero-shot inference."""
+        try:
+            logger.debug(f"Streaming zero-shot synthesis (v3): '{target_text[:60]}...'")
+
+            output_generator = self._model.inference_zero_shot(
+                target_text, prompt_text, ref_audio_path, stream=True
+            )
+
+            all_speech_chunks: List[torch.Tensor] = []
+            for out_dict in output_generator:
+                speech = out_dict['tts_speech']
+                if speech.dim() == 3:
+                    speech = speech.squeeze(0)
+                if speech.dim() == 1:
+                    speech = speech.unsqueeze(0)
+                all_speech_chunks.append(speech.cpu())
+
+            if not all_speech_chunks:
+                raise SynthesisError("Model did not generate any audio for cloned voice (streaming)")
+
+            speech = torch.cat(all_speech_chunks, dim=-1)
+            logger.debug(f"Streaming cloned audio: {speech.shape[-1] / 24000:.2f}s")
+
+            if speed != 1.0:
+                speech = torchaudio.functional.resample(speech, int(24000 * speed), 24000)
+            if pitch != 1.0:
+                speech = self._apply_pitch_shift(speech, pitch)
+
+            return self._tensor_to_wav_bytes(speech)
+
+        except Exception as e:
+            logger.warning(f"Streaming zero-shot failed, falling back to chunked: {e}")
+            return self._synthesize_cloned_segment_chunked(target_text, prompt_text, ref_audio_path, speed, pitch)
+
+    def _synthesize_cloned_segment_chunked(
+        self,
+        target_text: str,
+        prompt_text: str,
+        ref_audio_path: str,
+        speed: float,
+        pitch: float,
+    ) -> bytes:
+        """Synthesize cloned voice by chunks (v1/v2)."""
+        # Split into manageable chunks
+        text_chunks = self._split_text_into_chunks(target_text)
+        logger.debug(f"Cloned voice: text split into {len(text_chunks)} chunks")
+
+        all_speech_chunks: List[torch.Tensor] = []
+
+        for idx, chunk in enumerate(text_chunks):
+            logger.debug(f"Synthesizing cloned chunk {idx + 1}/{len(text_chunks)}: '{chunk[:60]}...'")
+
+            # Ensure chunk ends with punctuation
+            if not any(chunk.endswith(p) for p in [".", "!", "?", "。", "！", "？"]):
+                chunk += "."
+
+            output_generator = self._model.inference_zero_shot(
+                chunk, prompt_text, ref_audio_path, stream=False
+            )
+
+            chunk_speech_list: List[torch.Tensor] = []
+            for out_dict in output_generator:
+                speech = out_dict['tts_speech']
+                if speech.dim() == 3:
+                    speech = speech.squeeze(0)
+                if speech.dim() == 1:
+                    speech = speech.unsqueeze(0)
+                chunk_speech_list.append(speech.cpu())
+
+            if chunk_speech_list:
+                chunk_speech = torch.cat(chunk_speech_list, dim=-1)
+                if chunk_speech.shape[-1] >= MIN_AUDIO_SAMPLES:
+                    all_speech_chunks.append(chunk_speech)
+                    logger.debug(f"Cloned chunk {idx + 1} generated: {chunk_speech.shape[-1] / 24000:.2f}s")
+                else:
+                    logger.warning(f"Cloned chunk {idx + 1} did not generate valid audio")
+
+        if not all_speech_chunks:
+            raise SynthesisError("Model did not generate any audio for cloned voice")
+
+        speech = torch.cat(all_speech_chunks, dim=-1)
+        logger.debug(f"Final cloned audio: {speech.shape[-1] / 24000:.2f}s")
+
+        if speed != 1.0:
+            speech = torchaudio.functional.resample(speech, int(24000 * speed), 24000)
+
+        if pitch != 1.0:
+            speech = self._apply_pitch_shift(speech, pitch)
+
+        return self._tensor_to_wav_bytes(speech)
 
     def clone_voice(
         self,
