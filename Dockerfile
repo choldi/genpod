@@ -1,4 +1,4 @@
-# Usamos una imagen base con CUDA 12.1 y Python 3.10 (estándar para CosyVoice)
+<# Usamos una imagen base con CUDA 12.1 y Ubuntu 22.04 (estándar para CosyVoice)
 FROM nvidia/cuda:12.1.0-cudnn8-devel-ubuntu22.04
 
 # Configuración de entorno
@@ -10,6 +10,7 @@ ENV PIP_NO_CACHE_DIR=1
 # Instalar dependencias del sistema necesarias para CosyVoice y compilación
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3.10 \
+    python3.10-dev \
     python3.10-venv \
     python3.10-distutils \
     python3-pip \
@@ -41,7 +42,6 @@ RUN git clone --recursive https://github.com/QwenAudio/CosyVoice.git /app/CosyVo
 ENV PYTHONPATH="${PYTHONPATH}:/app/CosyVoice:/app/CosyVoice/third_party/Matcha-TTS"
 
 # 4. Instalar las dependencias ESPECÍFICAS de CosyVoice desde su requirements.txt
-# Usamos el mirror de Aliyun por velocidad, o quita '-i ...' si prefieres PyPI global
 RUN pip install --user -r /app/CosyVoice/requirements.txt
 
 # 5. Copiar el resto de tu aplicación
@@ -55,4 +55,3 @@ EXPOSE 8000
 
 # Comando de entrada
 CMD ["docker/entrypoint.sh"]
-
