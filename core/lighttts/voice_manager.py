@@ -5,6 +5,9 @@ import time
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 from core.exceptions import VoiceNotFoundError
+from core.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class VoiceManager:
@@ -18,6 +21,7 @@ class VoiceManager:
         """
         self.voices_path = Path(voices_path)
         self.voices_path.mkdir(parents=True, exist_ok=True)
+        logger.debug(f"VoiceManager initialized with path: {voices_path}")
 
     def save_voice_metadata(self, voice_id: str, metadata: Dict[str, Any]) -> None:
         """Save voice metadata to JSON file.
@@ -31,8 +35,13 @@ class VoiceManager:
             metadata["created_at"] = time.time()
         
         metadata_path = self.voices_path / f"{voice_id}.json"
-        with open(metadata_path, "w", encoding="utf-8") as f:
-            json.dump(metadata, f, ensure_ascii=False, indent=2)
+        try:
+            with open(metadata_path, "w", encoding="utf-8") as f:
+                json.dump(metadata, f, ensure_ascii=False, indent=2)
+            logger.debug(f"Saved voice metadata for: {voice_id}")
+        except Exception as e:
+            logger.error(f"Failed to save voice metadata for {voice_id}: {e}", exc_info=True)
+            raise
 
     def load_voice_metadata(self, voice_id: str) -> Dict[str, Any]:
         """Load voice metadata from JSON file.
@@ -48,9 +57,19 @@ class VoiceManager:
         """
         metadata_path = self.voices_path / f"{voice_id}.json"
         if not metadata_path.exists():
+            logger.warning(f"Voice metadata not found: {voice_id}")
             raise VoiceNotFoundError(f"Voice '{voice_id}' not found")
-        with open(metadata_path, "r", encoding="utf-8") as f:
-            return json.load(f)
+        try:
+            with open(metadata_path, "r", encoding="utf-8") as f:
+                metadata = json.load(f)
+            logger.debug(f"Loaded voice metadata for: {voice_id}")
+            return metadata
+        except json.JSONDecodeError as e:
+            logger.error(f"Invalid JSON in voice metadata for {voice_id}: {e}", exc_info=True)
+            raise VoiceNotFoundError(f"Voice '{voice_id}' has corrupted metadata")
+        except Exception as e:
+            logger.error(f"Failed to load voice metadata for {voice_id}: {e}", exc_info=True)
+            raise
 
     def list_voices(self) -> List[Dict[str, Any]]:
         """List all voice metadata files.
@@ -64,8 +83,10 @@ class VoiceManager:
                 with open(json_file, "r", encoding="utf-8") as f:
                     metadata = json.load(f)
                     voices.append(metadata)
-            except (json.JSONDecodeError, OSError):
+            except (json.JSONDecodeError, OSError) as e:
+                logger.warning(f"Skipping invalid voice file {json_file}: {e}")
                 continue
+        logger.debug(f"Listed {len(voices)} voices")
         return voices
 
     def delete_voice(self, voice_id: str) -> bool:
@@ -81,9 +102,21 @@ class VoiceManager:
         audio_path = self.voices_path / f"{voice_id}.wav"
         deleted = False
         if metadata_path.exists():
-            metadata_path.unlink()
-            deleted = True
+            try:
+                metadata_path.unlink()
+                deleted = True
+                logger.debug(f"Deleted metadata for voice: {voice_id}")
+            except Exception as e:
+                logger.error(f"Failed to delete metadata for {voice_id}: {e}", exc_info=True)
         if audio_path.exists():
-            audio_path.unlink()
-            deleted = True
+            try:
+                audio_path.unlink()
+                deleted = True
+                logger.debug(f"Deleted audio for voice: {voice_id}")
+            except Exception as e:
+                logger.error(f"Failed to delete audio for {voice_id}: {e}", exc_info=True)
+        if deleted:
+            logger.info(f"Voice deleted: {voice_id}")
+        else:
+            logger.warning(f"Voice not found for deletion: {voice_id}")
         return deleted

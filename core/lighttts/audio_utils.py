@@ -7,7 +7,9 @@ from typing import List
 import torch
 import torchaudio
 
-logger = logging.getLogger(__name__)
+from core.logger import get_logger
+
+logger = get_logger(__name__)
 
 # Crossfade duration between chunks (seconds)
 CROSSFADE_DURATION = 0.15
@@ -25,9 +27,15 @@ def tensor_to_wav_bytes(speech: torch.Tensor) -> bytes:
         torchaudio.save(tmp_path, speech, 24000, format="wav")
         with open(tmp_path, "rb") as f:
             return f.read()
+    except Exception as e:
+        logger.error(f"Failed to convert tensor to WAV bytes: {e}", exc_info=True)
+        raise
     finally:
         if os.path.exists(tmp_path):
-            os.remove(tmp_path)
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
 
 
 def apply_pitch_shift(waveform: torch.Tensor, pitch_factor: float) -> torch.Tensor:
@@ -45,8 +53,8 @@ def apply_pitch_shift(waveform: torch.Tensor, pitch_factor: float) -> torch.Tens
             waveform, 24000, effects
         )
         return shifted
-    except Exception:
-        logger.warning("Pitch shift failed, returning original waveform")
+    except Exception as e:
+        logger.warning(f"Pitch shift failed, returning original waveform: {e}")
         return waveform
 
 
@@ -98,4 +106,7 @@ def crossfade_chunks(chunks: List[torch.Tensor], crossfade_samples: int = CROSSF
 
 def validate_audio_length(speech: torch.Tensor) -> bool:
     """Check if audio has minimum valid length."""
-    return speech.shape[-1] >= MIN_AUDIO_SAMPLES
+    is_valid = speech.shape[-1] >= MIN_AUDIO_SAMPLES
+    if not is_valid:
+        logger.warning(f"Audio too short: {speech.shape[-1]} samples (min: {MIN_AUDIO_SAMPLES})")
+    return is_valid

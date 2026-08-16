@@ -7,8 +7,9 @@ import torch
 
 from core.config import settings
 from core.exceptions import ModelLoadError
+from core.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class ModelLoader:
@@ -49,11 +50,13 @@ class ModelLoader:
             return self._model, self._model_version, self._load_wav
 
         except ImportError as e:
+            logger.error("CosyVoice library not installed or outdated", exc_info=True)
             raise ModelLoadError(
                 "CosyVoice library not installed or outdated. "
                 "Please ensure the latest version is cloned and PYTHONPATH is set correctly."
             ) from e
         except Exception as e:
+            logger.error(f"Failed to load CosyVoice model: {e}", exc_info=True)
             raise ModelLoadError(f"Failed to load CosyVoice model: {e}") from e
 
     def _detect_model_dir(self) -> Path:
@@ -69,6 +72,7 @@ class ModelLoader:
         if model_dirs:
             return model_dirs[0]
 
+        logger.error(f"No CosyVoice model found in {self.models_path}")
         raise ModelLoadError(
             f"No CosyVoice model found in {self.models_path}. "
             "Please download the model weights first."

@@ -4,8 +4,9 @@ import logging
 from typing import List, Dict, Any
 
 from core.lighttts.voice_manager import VoiceManager
+from core.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Mapping from simple API aliases to actual CosyVoice speaker IDs
 VOICE_ALIAS_MAP = {
@@ -24,6 +25,7 @@ class VoiceRegistry:
     def __init__(self, voices_path: str, voice_manager: VoiceManager) -> None:
         self.voices_path = voices_path
         self._voice_manager = voice_manager
+        logger.debug(f"VoiceRegistry initialized with path: {voices_path}")
 
     def list_voices(self) -> List[Dict[str, Any]]:
         """Scan and return all available voices (base and cloned)."""
@@ -58,6 +60,7 @@ class VoiceRegistry:
                 "sample_rate": 24000,
             })
 
+        logger.debug(f"Total voices available: {len(voices)}")
         return voices
 
     def is_cloned_voice(self, voice_id: str) -> bool:
@@ -67,18 +70,24 @@ class VoiceRegistry:
             return bool(meta and meta.get("is_cloned"))
         except FileNotFoundError:
             return False
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Error checking voice type for {voice_id}: {e}")
             return False
 
     def get_base_speaker_id(self, voice_id: str) -> str:
         """Get actual CosyVoice speaker ID for base voice alias."""
-        return VOICE_ALIAS_MAP.get(voice_id, voice_id)
+        speaker_id = VOICE_ALIAS_MAP.get(voice_id, voice_id)
+        logger.debug(f"Base speaker ID for {voice_id}: {speaker_id}")
+        return speaker_id
 
     def get_cloned_voice_path(self, voice_id: str) -> str:
         """Get reference audio path for cloned voice."""
         from pathlib import Path
-        return str(Path(self.voices_path) / f"{voice_id}.wav")
+        path = str(Path(self.voices_path) / f"{voice_id}.wav")
+        logger.debug(f"Cloned voice path for {voice_id}: {path}")
+        return path
 
     def load_cloned_metadata(self, voice_id: str) -> Dict[str, Any]:
         """Load metadata for cloned voice."""
+        logger.debug(f"Loading cloned metadata for: {voice_id}")
         return self._voice_manager.load_voice_metadata(voice_id)

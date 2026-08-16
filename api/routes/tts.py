@@ -9,9 +9,10 @@ from api.dependencies import get_lighttts_engine
 from api.schemas import TTSRequest
 from core.lighttts.engine import LightTTSEngine
 from core.exceptions import VoiceNotFoundError, SynthesisError
+from core.logger import get_logger
 
 router = APIRouter()
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @router.post("/tts")

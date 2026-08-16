@@ -18,6 +18,11 @@ class Settings(BaseSettings):
     DEVICE: str = "cpu"
     MODELS_PATH: str = "./data/models"
     VOICES_PATH: str = "./data/voices"
+    
+    # Logging configuration
+    LOGLEVEL: str = "INFO"
+    LOGDEST: str = "console"  # console, file, both
+    LOGPATH: str = "./logs/lighttts.log"
 
 
 @lru_cache

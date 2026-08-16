@@ -23,8 +23,9 @@ from core.lighttts.voice_registry import VoiceRegistry
 from core.lighttts.base_synthesizer import BaseSynthesizer
 from core.lighttts.cloned_synthesizer import ClonedSynthesizer
 from core.lighttts.audio_utils import tensor_to_wav_bytes
+from core.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class LightTTSEngine:

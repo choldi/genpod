@@ -8,9 +8,10 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from api.dependencies import get_lighttts_engine
 from core.lighttts.engine import LightTTSEngine
 from core.exceptions import CloningError, AudioTooShortError
+from core.logger import get_logger
 
 router = APIRouter()
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @router.post("/clone")
@@ -48,6 +49,7 @@ async def clone_voice(
         }
 
     except AudioTooShortError as e:
+        logger.warning(f"Audio too short: {e}")
         raise HTTPException(status_code=400, detail=str(e))
     except CloningError as e:
         logger.error(f"Cloning error: {e}")
