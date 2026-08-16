@@ -143,4 +143,3 @@ async def synthesize(
     except Exception as e:
         logger.error(f"Unexpected error in TTS: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
-
