@@ -75,13 +75,28 @@ class LightTTSEngine:
         pitch: float = 1.0,
         emotion: str = "neutral",
         emotion_tags: bool = False,
+        chunk_size: Optional[int] = None,
     ) -> Generator[bytes, None, None]:
         """Generate audio chunks for the given text and voice.
+
+        Args:
+            text: Text to synthesize
+            voice_id: Voice identifier
+            lang: Language code
+            stream: Whether to stream chunks
+            speed: Speech speed factor
+            pitch: Pitch factor
+            emotion: Emotion style (kept for API compatibility)
+            emotion_tags: Whether to use emotion tags (kept for API compatibility)
+            chunk_size: Chunking strategy:
+                - None (default): Sentence-based chunking (current behavior)
+                - <= 0: No chunking, process entire text at once
+                - > 0: Custom chunk size in characters
 
         Note: emotion and emotion_tags parameters are kept for API compatibility
         but are no longer processed - the underlying model handles prosody.
         """
-        logger.info(f"Starting synthesis: voice_id={voice_id}, text_len={len(text)}, stream={stream}, speed={speed}, pitch={pitch}")
+        logger.info(f"Starting synthesis: voice_id={voice_id}, text_len={len(text)}, stream={stream}, speed={speed}, pitch={pitch}, chunk_size={chunk_size}")
         
         if not self._model:
             logger.error("Model not loaded")
@@ -105,6 +120,7 @@ class LightTTSEngine:
                     "pitch": pitch,
                     "language": lang,
                     "stream": stream,
+                    "chunk_size": chunk_size,
                 }
             else:
                 logger.debug("Using base synthesizer")
@@ -117,6 +133,7 @@ class LightTTSEngine:
                     "speed": speed,
                     "pitch": pitch,
                     "stream": stream,
+                    "chunk_size": chunk_size,
                 }
 
             logger.debug("Starting synthesizer iteration")

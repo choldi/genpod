@@ -3,7 +3,7 @@
 import logging
 import re
 from pathlib import Path
-from typing import Generator, List
+from typing import Generator, List, Optional
 import torch
 import torchaudio
 
@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 ZERO_SHOT_PROMPT_PREFIX = "You are a helpful assistant.<|endofprompt|>"
 # Maximum length for prompt text to avoid model reproducing it
 MAX_PROMPT_CHARS = 100
-# Maximum characters per text chunk for synthesis
+# Maximum characters per text chunk for synthesis (used when chunk_size=None)
 MAX_CHUNK_CHARS = 5000
 
 
@@ -42,8 +42,22 @@ class ClonedSynthesizer:
         pitch: float,
         language: str,
         stream: bool,
+        chunk_size: Optional[int] = None,
     ) -> Generator[bytes, None, None]:
-        """Generate audio for cloned voice using application-level chunking."""
+        """Generate audio for cloned voice with configurable chunking.
+
+        Args:
+            text: Text to synthesize
+            voice_id: Voice identifier
+            speed: Speed factor
+            pitch: Pitch factor
+            language: Language code
+            stream: Whether to stream chunks
+            chunk_size: Chunking strategy:
+                - None (default): Sentence-based chunking with hallucination prevention
+                - <= 0: No chunking, process entire text at once
+                - > 0: Custom chunk size in characters
+        """
         metadata = self._voice_manager.load_voice_metadata(voice_id)
         ref_audio_path = self._voices_path / f"{voice_id}.wav"
 
@@ -59,18 +73,30 @@ class ClonedSynthesizer:
             if not any(target_text.endswith(p) for p in [".", "!", "?", "。", "！", "？"]):
                 target_text += "."
 
-            # STRATEGY: Application-level chunking (BEST for stability and hallucination prevention)
-            # We avoid model-level streaming (stream=True) because it splits unpredictably (e.g. by newlines)
-            # causing "too short prompt" warnings and hallucinations on short final chunks.
-            logger.debug(f"Starting chunked zero-shot synthesis ({self._model_version}): '{target_text[:60]}...'")
-            audio_bytes = self._synthesize_chunked(
-                target_text, prompt_text, str(ref_audio_path), speed, pitch
-            )
+            # Determine chunking strategy
+            if chunk_size is None:
+                # Default: sentence-based chunking with hallucination prevention
+                logger.debug(f"Starting sentence-chunked zero-shot synthesis ({self._model_version}): '{target_text[:60]}...'")
+                audio_bytes = self._synthesize_sentence_chunked(
+                    target_text, prompt_text, str(ref_audio_path), speed, pitch
+                )
+            elif chunk_size <= 0:
+                # No chunking: process entire text
+                logger.debug(f"Starting full-text zero-shot synthesis ({self._model_version}): '{target_text[:60]}...'")
+                audio_bytes = self._synthesize_full_text(
+                    target_text, prompt_text, str(ref_audio_path), speed, pitch
+                )
+            else:
+                # Custom chunk size
+                logger.debug(f"Starting custom-chunked zero-shot synthesis ({self._model_version}, chunk_size={chunk_size}): '{target_text[:60]}...'")
+                audio_bytes = self._synthesize_custom_chunked(
+                    target_text, prompt_text, str(ref_audio_path), speed, pitch, chunk_size
+                )
 
             if stream:
-                chunk_size = 4096
-                for i in range(0, len(audio_bytes), chunk_size):
-                    yield audio_bytes[i:i + chunk_size]
+                chunk_size_bytes = 4096
+                for i in range(0, len(audio_bytes), chunk_size_bytes):
+                    yield audio_bytes[i:i + chunk_size_bytes]
             else:
                 yield audio_bytes
 
@@ -82,7 +108,7 @@ class ClonedSynthesizer:
             logger.error(f"Cloned voice synthesis failed: {e}")
             raise SynthesisError(f"Cloned voice synthesis failed: {e}") from e
 
-    def _synthesize_chunked(
+    def _synthesize_full_text(
         self,
         target_text: str,
         prompt_text: str,
@@ -90,9 +116,46 @@ class ClonedSynthesizer:
         speed: float,
         pitch: float,
     ) -> bytes:
-        """Synthesize long text by splitting into sentence chunks with crossfade."""
+        """Synthesize entire text in a single zero-shot inference call."""
+        try:
+            logger.debug(f"Full-text zero-shot inference for text length: {len(target_text)}")
+
+            output_generator = self._model.inference_zero_shot(
+                target_text, prompt_text, ref_audio_path, stream=False
+            )
+
+            all_speech_chunks: List[torch.Tensor] = []
+            for out_dict in output_generator:
+                speech = out_dict['tts_speech']
+                if speech.dim() == 3:
+                    speech = speech.squeeze(0)
+                if speech.dim() == 1:
+                    speech = speech.unsqueeze(0)
+                all_speech_chunks.append(speech.cpu())
+
+            if not all_speech_chunks:
+                raise SynthesisError("Model did not generate any audio for cloned voice (full-text)")
+
+            speech = torch.cat(all_speech_chunks, dim=-1)
+            logger.debug(f"Full-text cloned audio: {speech.shape[-1] / 24000:.2f}s")
+
+            return self._post_process(speech, speed, pitch)
+
+        except Exception as e:
+            logger.error(f"Full-text zero-shot synthesis failed: {e}")
+            raise SynthesisError(f"Full-text synthesis failed: {e}") from e
+
+    def _synthesize_sentence_chunked(
+        self,
+        target_text: str,
+        prompt_text: str,
+        ref_audio_path: str,
+        speed: float,
+        pitch: float,
+    ) -> bytes:
+        """Synthesize long text by splitting into sentence chunks with crossfade (default behavior)."""
         text_chunks = self._split_text_into_chunks(target_text)
-        logger.debug(f"Cloned voice: text split into {len(text_chunks)} chunks")
+        logger.debug(f"Cloned voice: text split into {len(text_chunks)} sentence chunks")
 
         all_speech_chunks: List[torch.Tensor] = []
 
@@ -125,12 +188,65 @@ class ClonedSynthesizer:
 
             except Exception as e:
                 logger.error(f"Failed to synthesize cloned chunk {idx + 1}: {e}")
-                # Continue with other chunks to avoid total failure, but log error
-                # Alternatively, raise SynthesisError immediately if strictness is required
                 raise SynthesisError(f"Chunk {idx + 1} synthesis failed: {e}") from e
 
         if not all_speech_chunks:
-            raise SynthesisError("Model did not generate any audio for cloned voice (chunked)")
+            raise SynthesisError("Model did not generate any audio for cloned voice (sentence-chunked)")
+
+        # Use crossfade for smooth transitions between chunks
+        speech = crossfade_chunks(all_speech_chunks)
+        logger.debug(f"Final cloned audio (crossfaded): {speech.shape[-1] / 24000:.2f}s")
+
+        return self._post_process(speech, speed, pitch)
+
+    def _synthesize_custom_chunked(
+        self,
+        target_text: str,
+        prompt_text: str,
+        ref_audio_path: str,
+        speed: float,
+        pitch: float,
+        chunk_size: int,
+    ) -> bytes:
+        """Synthesize long text by splitting into custom-sized chunks with crossfade."""
+        text_chunks = self._split_text_by_size(target_text, chunk_size)
+        logger.debug(f"Cloned voice: text split into {len(text_chunks)} custom chunks (~{chunk_size} chars each)")
+
+        all_speech_chunks: List[torch.Tensor] = []
+
+        for idx, chunk in enumerate(text_chunks):
+            logger.debug(f"Synthesizing cloned chunk {idx + 1}/{len(text_chunks)}: '{chunk[:60]}...'")
+
+            try:
+                output_generator = self._model.inference_zero_shot(
+                    chunk, prompt_text, ref_audio_path, stream=False
+                )
+
+                chunk_speech_list: List[torch.Tensor] = []
+                for out_dict in output_generator:
+                    speech = out_dict['tts_speech']
+                    if speech.dim() == 3:
+                        speech = speech.squeeze(0)
+                    if speech.dim() == 1:
+                        speech = speech.unsqueeze(0)
+                    chunk_speech_list.append(speech.cpu())
+
+                if chunk_speech_list:
+                    chunk_speech = torch.cat(chunk_speech_list, dim=-1)
+                    if validate_audio_length(chunk_speech):
+                        all_speech_chunks.append(chunk_speech)
+                        logger.debug(f"Cloned chunk {idx + 1} generated: {chunk_speech.shape[-1] / 24000:.2f}s")
+                    else:
+                        logger.warning(f"Cloned chunk {idx + 1} did not generate valid audio")
+                else:
+                    logger.warning(f"Cloned chunk {idx + 1} returned empty generator")
+
+            except Exception as e:
+                logger.error(f"Failed to synthesize cloned chunk {idx + 1}: {e}")
+                raise SynthesisError(f"Chunk {idx + 1} synthesis failed: {e}") from e
+
+        if not all_speech_chunks:
+            raise SynthesisError("Model did not generate any audio for cloned voice (custom-chunked)")
 
         # Use crossfade for smooth transitions between chunks
         speech = crossfade_chunks(all_speech_chunks)
@@ -172,7 +288,7 @@ class ClonedSynthesizer:
         return prompt
 
     def _split_text_into_chunks(self, text: str, max_chars: int = MAX_CHUNK_CHARS) -> List[str]:
-        """Split text into chunks based on sentence boundaries."""
+        """Split text into chunks based on sentence boundaries (default behavior)."""
         # Split by punctuation followed by whitespace or end of string
         sentences = re.split(r'(?<=[.!?。！？])\s*', text)
         sentences = [s.strip() for s in sentences if s.strip()]
@@ -193,5 +309,30 @@ class ClonedSynthesizer:
 
         if current_chunk.strip():
             chunks.append(current_chunk.strip())
+
+        return chunks if chunks else [text]
+
+    def _split_text_by_size(self, text: str, chunk_size: int) -> List[str]:
+        """Split text into chunks of approximately chunk_size characters."""
+        if chunk_size <= 0:
+            return [text]
+
+        words = text.split()
+        chunks: List[str] = []
+        current_chunk = []
+        current_length = 0
+
+        for word in words:
+            word_length = len(word) + 1  # +1 for space
+            if current_length + word_length > chunk_size and current_chunk:
+                chunks.append(" ".join(current_chunk))
+                current_chunk = [word]
+                current_length = word_length
+            else:
+                current_chunk.append(word)
+                current_length += word_length
+
+        if current_chunk:
+            chunks.append(" ".join(current_chunk))
 
         return chunks if chunks else [text]
