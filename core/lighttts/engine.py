@@ -61,14 +61,17 @@ COSYVOICE3_STYLE_TAGS = {
 # Maximum length for prompt text to avoid model reproducing it
 MAX_PROMPT_CHARS = 100
 # Maximum length for each synthesis chunk (increased significantly for better context)
-MAX_CHUNK_CHARS = 1000
+MAX_CHUNK_CHARS = 10000
 # Minimum text length to trigger chunking (INCREASED DRAMATICALLY - CosyVoice 2/3 handles long texts well)
-MIN_CHUNK_THRESHOLD = 10000
+MIN_CHUNK_THRESHOLD = 50000
 # Minimum valid audio length in samples (0.1s at 24kHz)
 MIN_AUDIO_SAMPLES = 2400
 # Silence duration between chunks (seconds)
 CHUNK_SILENCE_DURATION = 0.15
 CHUNK_SILENCE_SAMPLES = int(24000 * CHUNK_SILENCE_DURATION)
+
+# Prefix required for CosyVoice 3 zero-shot prompt to prevent hallucination
+ZERO_SHOT_PROMPT_PREFIX = "You are a helpful assistant.<|endofprompt|>"
 
 
 class LightTTSEngine:
@@ -370,8 +373,11 @@ class LightTTSEngine:
     def _prepare_prompt_text(self, transcript: str) -> str:
         """Prepare the prompt text for zero-shot inference.
 
-        Truncates the transcript to avoid model reproducing it,
-        and appends the end-of-prompt token.
+        CRITICAL: CosyVoice 3 requires a specific prefix format to prevent hallucination.
+        Format: "You are a helpful assistant.<|endofprompt|>{transcript}<|endofprompt|>"
+        
+        This fixes issues #1704 and #1787 where the model would reproduce prompt text
+        or leak reference audio into the output.
         """
         prompt = transcript.strip()
 
@@ -390,8 +396,9 @@ class LightTTSEngine:
         if not any(prompt.endswith(p) for p in [".", "!", "?", "。", "！", "？"]):
             prompt += "."
 
-        # Append end-of-prompt token (critical for preventing hallucination)
-        prompt += "<|endofprompt|>"
+        # CRITICAL FIX: Add required prefix for CosyVoice 3 zero-shot
+        # This prevents hallucination of prompt text and reference audio leakage
+        prompt = ZERO_SHOT_PROMPT_PREFIX + prompt + "<|endofprompt|>"
 
         return prompt
 
@@ -521,6 +528,8 @@ class LightTTSEngine:
         CRITICAL: Never chunk cloned voice synthesis. Chunking causes hallucination
         of prompt text and reference audio leakage. CosyVoice 2/3 handles long texts
         natively via streaming or single-shot inference.
+        
+        Uses the corrected prompt format: "You are a helpful assistant.<|endofprompt|>{transcript}<|endofprompt|>"
         """
         metadata = self._voice_manager.load_voice_metadata(voice_id)
         ref_audio_path = self.voices_path / f"{voice_id}.wav"
@@ -530,6 +539,7 @@ class LightTTSEngine:
 
         try:
             # Prepare prompt text ONCE from metadata (transcript of reference audio)
+            # This uses the corrected format with prefix to prevent hallucination
             prompt_text = self._prepare_prompt_text(metadata.get("transcript", ""))
 
             # Ensure target text ends with punctuation
@@ -537,7 +547,7 @@ class LightTTSEngine:
             if not any(target_text.endswith(p) for p in [".", "!", "?", "。", "！", "？"]):
                 target_text += "."
 
-            # STRATEGY 1: Streaming zero-shot inference (BEST for long texts, maintains context)
+            # STRATEGY 1: Streaming zero-shot inference (BEST for all text lengths, maintains context)
             # This is the primary method for ALL text lengths for cloned voices
             if hasattr(self._model, 'inference_zero_shot'):
                 try:
@@ -558,13 +568,18 @@ class LightTTSEngine:
             except Exception as e:
                 logger.warning(f"Single-shot synthesis failed: {e}")
 
-            # STRATEGY 3: LAST RESORT - Only for extremely long texts (>10k chars)
-            # Even then, use a safer approach without prompt repetition
+            # STRATEGY 3: LAST RESORT - Only for extremely long texts (>50k chars)
+            # Even then, use streaming if possible
             if len(target_text) > MIN_CHUNK_THRESHOLD:
-                logger.warning(f"Text length {len(target_text)} exceeds {MIN_CHUNK_THRESHOLD}, using chunked synthesis as absolute last resort")
-                return self._synthesize_cloned_segment_chunked_safe(
-                    target_text, prompt_text, str(ref_audio_path), speed, pitch
-                )
+                logger.warning(f"Text length {len(target_text)} exceeds {MIN_CHUNK_THRESHOLD}, attempting streaming as last resort")
+                # Try streaming one more time with larger chunks
+                try:
+                    return self._synthesize_cloned_segment_streaming(
+                        target_text, prompt_text, str(ref_audio_path), speed, pitch
+                    )
+                except Exception as e:
+                    logger.error(f"Streaming synthesis failed for long text: {e}")
+                    raise SynthesisError("All synthesis methods failed for cloned voice. Check model compatibility and reference audio.") from e
             else:
                 # If not extremely long but both methods failed, re-raise with context
                 raise SynthesisError("All synthesis methods failed for cloned voice. Check model compatibility and reference audio.")
@@ -589,6 +604,8 @@ class LightTTSEngine:
         
         This is the PREFERRED method as it maintains acoustic context throughout
         the entire generation, preventing hallucination and prompt leakage.
+        
+        The prompt_text already includes the required prefix: "You are a helpful assistant.<|endofprompt|>{transcript}<|endofprompt|>"
         """
         try:
             logger.debug(f"Streaming zero-shot synthesis ({self._model_version}): '{target_text[:60]}...'")
@@ -636,6 +653,8 @@ class LightTTSEngine:
         
         CosyVoice 2/3 supports long-form synthesis natively. This avoids
         the hallucination issues caused by chunking with repeated prompts.
+        
+        The prompt_text already includes the required prefix: "You are a helpful assistant.<|endofprompt|>{transcript}<|endofprompt|>"
         """
         try:
             logger.debug(f"Single-shot zero-shot synthesis: '{target_text[:60]}...'")
@@ -669,107 +688,6 @@ class LightTTSEngine:
         except Exception as e:
             logger.warning(f"Single-shot synthesis failed: {e}")
             raise
-
-    def _synthesize_cloned_segment_chunked_safe(
-        self,
-        target_text: str,
-        prompt_text: str,
-        ref_audio_path: str,
-        speed: float,
-        pitch: float,
-    ) -> bytes:
-        """SAFER chunked synthesis for cloned voice (ABSOLUTE LAST RESORT).
-        
-        Key differences from previous chunked approach:
-        1. Uses LARGER chunks (5000 chars) to minimize boundaries
-        2. Does NOT repeat prompt for each chunk - uses prompt only for FIRST chunk
-        3. Subsequent chunks use the PREVIOUS chunk's audio as prompt (continuation)
-        4. This mimics how streaming works but with manual chunking
-        
-        This prevents prompt text hallucination and reference audio leakage.
-        """
-        # Split into LARGE chunks to minimize boundaries
-        text_chunks = self._split_text_into_chunks(target_text, max_chars=5000)
-        logger.debug(f"Cloned voice: SAFE chunked synthesis into {len(text_chunks)} chunks (LAST RESORT)")
-
-        all_speech_chunks: List[torch.Tensor] = []
-        previous_audio: Optional[torch.Tensor] = None
-
-        for idx, chunk in enumerate(text_chunks):
-            logger.debug(f"SAFE chunked synthesis {idx + 1}/{len(text_chunks)}: '{chunk[:60]}...'")
-
-            # Ensure chunk ends with punctuation
-            if not any(chunk.endswith(p) for p in [".", "!", "?", "。", "！", "？"]):
-                chunk += "."
-
-            # CRITICAL: Only use full prompt for FIRST chunk
-            # For subsequent chunks, use previous audio as prompt (continuation)
-            if idx == 0:
-                current_prompt_text = prompt_text
-                current_ref_audio = ref_audio_path
-            else:
-                # Save previous audio to temp file for use as prompt
-                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
-                    tmp_path = tmp_file.name
-                try:
-                    torchaudio.save(tmp_path, previous_audio, 24000, format="wav")
-                    current_prompt_text = "<|endofprompt|>"  # Minimal prompt for continuation
-                    current_ref_audio = tmp_path
-                except Exception as e:
-                    logger.error(f"Failed to save continuation audio: {e}")
-                    raise SynthesisError("Failed to prepare continuation prompt") from e
-
-            try:
-                output_generator = self._model.inference_zero_shot(
-                    chunk, current_prompt_text, current_ref_audio, stream=False
-                )
-
-                chunk_speech_list: List[torch.Tensor] = []
-                for out_dict in output_generator:
-                    speech = out_dict['tts_speech']
-                    if speech.dim() == 3:
-                        speech = speech.squeeze(0)
-                    if speech.dim() == 1:
-                        speech = speech.unsqueeze(0)
-                    chunk_speech_list.append(speech.cpu())
-
-                if chunk_speech_list:
-                    chunk_speech = torch.cat(chunk_speech_list, dim=-1)
-                    if chunk_speech.shape[-1] >= MIN_AUDIO_SAMPLES:
-                        all_speech_chunks.append(chunk_speech)
-                        previous_audio = chunk_speech  # Save for next iteration
-                        logger.debug(f"SAFE chunk {idx + 1} generated: {chunk_speech.shape[-1] / 24000:.2f}s")
-                    else:
-                        logger.warning(f"SAFE chunk {idx + 1} did not generate valid audio")
-                else:
-                    logger.warning(f"SAFE chunk {idx + 1} produced no output")
-
-            finally:
-                # Clean up temp file if created
-                if idx > 0 and 'tmp_path' in locals() and os.path.exists(tmp_path):
-                    os.remove(tmp_path)
-
-        if not all_speech_chunks:
-            raise SynthesisError("Model did not generate any audio for cloned voice (safe chunked)")
-
-        # Add small silence between chunks for natural pauses
-        silence = torch.zeros(1, CHUNK_SILENCE_SAMPLES)
-        final_chunks = []
-        for i, chunk in enumerate(all_speech_chunks):
-            final_chunks.append(chunk)
-            if i < len(all_speech_chunks) - 1:
-                final_chunks.append(silence)
-
-        speech = torch.cat(final_chunks, dim=-1)
-        logger.debug(f"Final SAFE chunked audio: {speech.shape[-1] / 24000:.2f}s")
-
-        if speed != 1.0:
-            speech = torchaudio.functional.resample(speech, int(24000 * speed), 24000)
-
-        if pitch != 1.0:
-            speech = self._apply_pitch_shift(speech, pitch)
-
-        return self._tensor_to_wav_bytes(speech)
 
     def clone_voice(
         self,
