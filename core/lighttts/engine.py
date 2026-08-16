@@ -96,7 +96,10 @@ class LightTTSEngine:
         Note: emotion and emotion_tags parameters are kept for API compatibility
         but are no longer processed - the underlying model handles prosody.
         """
-        logger.info(f"Starting synthesis: voice_id={voice_id}, text_len={len(text)}, stream={stream}, speed={speed}, pitch={pitch}, chunk_size={chunk_size}")
+        logger.info(
+            f"Engine synthesize: voice_id={voice_id}, text_len={len(text)}, "
+            f"stream={stream}, speed={speed}, pitch={pitch}, chunk_size={chunk_size}"
+        )
         
         if not self._model:
             logger.error("Model not loaded")

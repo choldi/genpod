@@ -21,6 +21,14 @@ async def synthesize(
 ):
     """Synthesize speech from text with dual mode support."""
     try:
+        # --- LOG DE PARÁMETROS RECIBIDOS ---
+        logger.info(
+            f"TTS Request: text_len={len(request.text)}, voice_id='{request.voice_id}', "
+            f"language='{request.language}', stream={request.stream}, mode='{request.mode}', "
+            f"speed={request.speed}, pitch={request.pitch}, emotion='{request.emotion}', "
+            f"emotion_tags={request.emotion_tags}, chunk_size={request.chunk_size}"
+        )
+        
         # --- MODE LOGIC ---
         is_fast_mode = getattr(request, "mode", "studio") == "fast"
         
@@ -32,7 +40,7 @@ async def synthesize(
         chunk_size = getattr(request, "chunk_size", None)
         
         # Determine language safely (prioritize 'lang', fallback to 'language')
-        lang_val = getattr(request, "lang", getattr(request, "language", "en"))
+        lang_val = getattr(request, "language", "en")
         
         if is_fast_mode:
             logger.info(f"Mode: FAST | Lang: {lang_val} | Optimizing for low latency")
@@ -56,7 +64,7 @@ async def synthesize(
         if stream:
             def audio_generator():
                 try:
-                    logger.debug(f"Streaming synthesis: '{input_text[:50]}...'")
+                    logger.debug(f"Streaming synthesis: '{input_text[:50]}...' | chunk_size={chunk_size}")
                     for chunk in engine.synthesize(
                         text=input_text,
                         voice_id=request.voice_id,
