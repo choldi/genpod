@@ -38,23 +38,49 @@ class LightTTSEngine:
         self.device = self._resolve_device(device)
         logger.info(f"Using device: {self.device}")
 
+        # Validate paths exist
+        self._validate_paths()
+
         self._voice_manager = VoiceManager(str(self.voices_path))
         self._model_loader = ModelLoader(str(self.models_path), self.device)
         self._voice_registry = VoiceRegistry(str(self.voices_path), self._voice_manager)
 
         # Load model and initialize synthesizers
         logger.info("Loading model...")
-        model, model_version, load_wav = self._model_loader.load()
-        self._model = model
-        self._model_version = model_version
-        self._load_wav = load_wav
-        logger.info(f"Model loaded successfully (version: {model_version})")
+        try:
+            model, model_version, load_wav = self._model_loader.load()
+            self._model = model
+            self._model_version = model_version
+            self._load_wav = load_wav
+            logger.info(f"Model loaded successfully (version: {model_version})")
+        except Exception as e:
+            logger.error(f"Failed to load model: {e}", exc_info=True)
+            raise ModelLoadError(f"Model loading failed: {e}") from e
 
-        self._base_synthesizer = BaseSynthesizer(model, model_version)
-        self._cloned_synthesizer = ClonedSynthesizer(
-            model, model_version, str(self.voices_path), self._voice_manager
-        )
-        logger.info("Synthesizers initialized.")
+        try:
+            self._base_synthesizer = BaseSynthesizer(model, model_version)
+            self._cloned_synthesizer = ClonedSynthesizer(
+                model, model_version, str(self.voices_path), self._voice_manager
+            )
+            logger.info("Synthesizers initialized.")
+        except Exception as e:
+            logger.error(f"Failed to initialize synthesizers: {e}", exc_info=True)
+            raise ModelLoadError(f"Synthesizer initialization failed: {e}") from e
+
+    def _validate_paths(self) -> None:
+        """Validate that required paths exist."""
+        if not self.models_path.exists():
+            logger.error(f"Models path does not exist: {self.models_path}")
+            raise ModelLoadError(f"Models path does not exist: {self.models_path}")
+        
+        if not self.voices_path.exists():
+            logger.warning(f"Voices path does not exist, creating: {self.voices_path}")
+            self.voices_path.mkdir(parents=True, exist_ok=True)
+        
+        # Check for model files (basic validation)
+        model_files = list(self.models_path.glob("*.pt")) + list(self.models_path.glob("*.bin")) + list(self.models_path.glob("*.safetensors"))
+        if not model_files:
+            logger.warning(f"No model files found in {self.models_path}. Expected .pt, .bin, or .safetensors files.")
 
     def _resolve_device(self, device: str) -> str:
         """Resolve the actual device to use based on availability."""
