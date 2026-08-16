@@ -29,6 +29,7 @@ async def synthesize(
         pitch = getattr(request, "pitch", None)
         emotion = getattr(request, "emotion", "neutral")
         emotion_tags = getattr(request, "emotion_tags", False)
+        chunk_size = getattr(request, "chunk_size", None)
         
         # Determine language safely (prioritize 'lang', fallback to 'language')
         lang_val = getattr(request, "lang", getattr(request, "language", "en"))
@@ -65,6 +66,7 @@ async def synthesize(
                         emotion=emotion,
                         stream=True,
                         emotion_tags=emotion_tags,
+                        chunk_size=chunk_size,
                     ):
                         yield chunk
                 except Exception as e:
@@ -90,6 +92,7 @@ async def synthesize(
                 emotion=emotion,
                 stream=False,
                 emotion_tags=emotion_tags,
+                chunk_size=chunk_size,
             ):
                 audio_data += chunk
 
