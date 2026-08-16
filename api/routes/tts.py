@@ -65,11 +65,27 @@ async def synthesize(
             logger.warning("Empty text received in request")
             raise HTTPException(status_code=400, detail="Text cannot be empty")
 
+        # Handle chunk_size logic:
+        # - chunk_size > 0: split by that character count
+        # - chunk_size <= 0: no splitting (single chunk)
+        # - chunk_size is None: use default (5000 characters)
+        effective_chunk_size = None
+        if chunk_size is not None:
+            if chunk_size > 0:
+                effective_chunk_size = chunk_size
+                logger.info(f"Custom chunk size: {effective_chunk_size} characters")
+            else:
+                effective_chunk_size = 0  # 0 means no chunking
+                logger.info("Chunking disabled (chunk_size <= 0)")
+        else:
+            effective_chunk_size = 5000  # Default chunk size
+            logger.info(f"Using default chunk size: {effective_chunk_size} characters")
+
         if stream:
             logger.info("Starting streaming response")
             def audio_generator():
                 try:
-                    logger.debug(f"Streaming synthesis: '{input_text[:50]}...' | chunk_size={chunk_size}")
+                    logger.debug(f"Streaming synthesis: '{input_text[:50]}...' | chunk_size={effective_chunk_size}")
                     for chunk in engine.synthesize(
                         text=input_text,
                         voice_id=request.voice_id,
@@ -79,7 +95,7 @@ async def synthesize(
                         emotion=emotion,
                         stream=True,
                         emotion_tags=emotion_tags,
-                        chunk_size=chunk_size,
+                        chunk_size=effective_chunk_size,
                     ):
                         yield chunk
                 except Exception as e:
@@ -106,7 +122,7 @@ async def synthesize(
                 emotion=emotion,
                 stream=False,
                 emotion_tags=emotion_tags,
-                chunk_size=chunk_size,
+                chunk_size=effective_chunk_size,
             ):
                 audio_data += chunk
 
