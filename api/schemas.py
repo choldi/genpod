@@ -30,7 +30,7 @@ class TTSRequest(BaseModel):
     pitch: Optional[float] = Field(default=None, ge=0.5, le=2.0, description="Pitch multiplier (0.5-2.0)")
     emotion: str = Field(default="neutral", description="Emotion (reserved for future use)")
     emotion_tags: bool = Field(default=False, description="Enable emotion tag parsing in text")
-    chunk_size: Optional[int] = Field(default=None, ge=1, description="Chunk size for streaming synthesis (optional)")
+    chunk_size: Optional[int] = Field(default=None, ge=0, description="Chunk size for streaming synthesis (optional, 0 for default)")
 
 
 class TTSResponse(BaseModel):
