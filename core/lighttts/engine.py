@@ -2,6 +2,8 @@
 
 import logging
 import re
+import time
+from datetime import datetime
 from pathlib import Path
 from typing import Generator, List, Dict, Any, Optional
 import torch
@@ -79,29 +81,59 @@ class LightTTSEngine:
         Note: emotion and emotion_tags parameters are kept for API compatibility
         but are no longer processed - the underlying model handles prosody.
         """
+        logger.info(f"Starting synthesis: voice_id={voice_id}, text_len={len(text)}, stream={stream}, speed={speed}, pitch={pitch}")
+        
         if not self._model:
+            logger.error("Model not loaded")
             raise SynthesisError("Model not loaded")
 
-        is_cloned = self._voice_registry.is_cloned_voice(voice_id)
+        try:
+            is_cloned = self._voice_registry.is_cloned_voice(voice_id)
+            logger.debug(f"Voice type: {'cloned' if is_cloned else 'base'}")
+        except Exception as e:
+            logger.error(f"Error checking voice type: {e}")
+            raise SynthesisError(f"Voice registry error: {e}") from e
 
-        if is_cloned:
-            yield from self._cloned_synthesizer.synthesize(
-                text=text,
-                voice_id=voice_id,
-                speed=speed,
-                pitch=pitch,
-                language=lang,
-                stream=stream,
-            )
-        else:
-            actual_spk_id = self._voice_registry.get_base_speaker_id(voice_id)
-            yield from self._base_synthesizer.synthesize(
-                text=text,
-                spk_id=actual_spk_id,
-                speed=speed,
-                pitch=pitch,
-                stream=stream,
-            )
+        try:
+            if is_cloned:
+                logger.debug("Using cloned synthesizer")
+                synthesizer = self._cloned_synthesizer
+                synth_args = {
+                    "text": text,
+                    "voice_id": voice_id,
+                    "speed": speed,
+                    "pitch": pitch,
+                    "language": lang,
+                    "stream": stream,
+                }
+            else:
+                logger.debug("Using base synthesizer")
+                actual_spk_id = self._voice_registry.get_base_speaker_id(voice_id)
+                logger.debug(f"Base speaker ID: {actual_spk_id}")
+                synthesizer = self._base_synthesizer
+                synth_args = {
+                    "text": text,
+                    "spk_id": actual_spk_id,
+                    "speed": speed,
+                    "pitch": pitch,
+                    "stream": stream,
+                }
+
+            logger.debug("Starting synthesizer iteration")
+            chunk_count = 0
+            start_time = time.time()
+            
+            for chunk in synthesizer.synthesize(**synth_args):
+                chunk_count += 1
+                if chunk_count == 1:
+                    logger.info(f"First chunk generated after {time.time() - start_time:.3f}s")
+                yield chunk
+                
+            logger.info(f"Synthesis completed: {chunk_count} chunks generated in {time.time() - start_time:.3f}s")
+            
+        except Exception as e:
+            logger.error(f"Synthesis failed: {e}", exc_info=True)
+            raise SynthesisError(f"Synthesis failed: {e}") from e
 
     def clone_voice(
         self,
@@ -111,17 +143,24 @@ class LightTTSEngine:
         language: str = "en",
     ) -> str:
         """Clone a voice from reference audio and transcript."""
+        logger.info(f"Cloning voice: name={voice_name}, audio={audio_path}, language={language}")
+        
         if not self._model:
+            logger.error("Model not loaded for cloning")
             raise CloningError("Model not loaded")
 
         audio_path = Path(audio_path)
         if not audio_path.exists():
+            logger.error(f"Reference audio not found: {audio_path}")
             raise CloningError(f"Reference audio not found: {audio_path}")
 
         try:
             info = torchaudio.info(str(audio_path))
             duration = info.num_frames / info.sample_rate
+            logger.debug(f"Audio duration: {duration:.2f}s, sample_rate: {info.sample_rate}")
+            
             if duration < 3.0:
+                logger.error(f"Reference audio too short: {duration:.1f}s")
                 raise AudioTooShortError(
                     f"Reference audio too short: {duration:.1f}s. Minimum 3 seconds required."
                 )
@@ -133,19 +172,24 @@ class LightTTSEngine:
         except AudioTooShortError:
             raise
         except Exception as e:
+            logger.error(f"Failed to validate audio: {e}")
             raise CloningError(f"Failed to validate audio: {e}") from e
 
         # Sanitize voice_id
         voice_id = re.sub(r'[^\w\-]', '_', voice_name)[:32]
+        logger.debug(f"Sanitized voice_id: {voice_id}")
 
         dest_audio = self.voices_path / f"{voice_id}.wav"
         try:
+            logger.debug("Loading and resampling audio")
             waveform, sr = torchaudio.load(str(audio_path))
             if sr != 24000:
                 resampler = torchaudio.transforms.Resample(sr, 24000)
                 waveform = resampler(waveform)
             torchaudio.save(str(dest_audio), waveform, 24000)
+            logger.debug(f"Saved reference audio to {dest_audio}")
         except Exception as e:
+            logger.error(f"Failed to process reference audio: {e}")
             raise CloningError(f"Failed to process reference audio: {e}") from e
 
         metadata = {
@@ -156,11 +200,18 @@ class LightTTSEngine:
             "is_cloned": True,
             "sample_rate": 24000,
             "transcript": transcript,
-            "created_at": str(torch.tensor(0).numpy()),
+            "created_at": datetime.utcnow().isoformat(),
         }
-        self._voice_manager.save_voice_metadata(voice_id, metadata)
+        try:
+            self._voice_manager.save_voice_metadata(voice_id, metadata)
+            logger.info(f"Voice cloned successfully: {voice_id}")
+        except Exception as e:
+            logger.error(f"Failed to save voice metadata: {e}")
+            raise CloningError(f"Failed to save voice metadata: {e}") from e
+            
         return voice_id
 
     def delete_voice(self, voice_id: str) -> bool:
         """Delete a cloned voice."""
+        logger.info(f"Deleting voice: {voice_id}")
         return self._voice_manager.delete_voice(voice_id)
