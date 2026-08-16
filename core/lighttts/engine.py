@@ -5,9 +5,10 @@ import re
 import logging
 import tempfile
 from pathlib import Path
-from typing import Generator, List, Dict, Any, Optional
+from typing import Generator, List, Dict, Any, Optional, Tuple
 import torch
 import torchaudio
+import numpy as np
 
 from core.config import settings
 from core.exceptions import (
@@ -60,15 +61,15 @@ COSYVOICE3_STYLE_TAGS = {
 
 # Maximum length for prompt text to avoid model reproducing it
 MAX_PROMPT_CHARS = 100
-# Maximum length for each synthesis chunk (increased significantly for better context)
-MAX_CHUNK_CHARS = 10000
+# Maximum length for each synthesis chunk (increased for better context)
+MAX_CHUNK_CHARS = 5000
 # Minimum text length to trigger chunking (INCREASED DRAMATICALLY - CosyVoice 2/3 handles long texts well)
 MIN_CHUNK_THRESHOLD = 50000
 # Minimum valid audio length in samples (0.1s at 24kHz)
 MIN_AUDIO_SAMPLES = 2400
-# Silence duration between chunks (seconds)
-CHUNK_SILENCE_DURATION = 0.15
-CHUNK_SILENCE_SAMPLES = int(24000 * CHUNK_SILENCE_DURATION)
+# Crossfade duration between chunks (seconds) - replaces silence for smoother transitions
+CROSSFADE_DURATION = 0.15
+CROSSFADE_SAMPLES = int(24000 * CROSSFADE_DURATION)
 
 # Prefix required for CosyVoice 3 zero-shot prompt to prevent hallucination
 ZERO_SHOT_PROMPT_PREFIX = "You are a helpful assistant.<|endofprompt|>"
@@ -235,6 +236,52 @@ class LightTTSEngine:
         except Exception:
             logger.warning("Pitch shift failed, returning original waveform")
             return waveform
+
+    def _crossfade_chunks(self, chunks: List[torch.Tensor], crossfade_samples: int = CROSSFADE_SAMPLES) -> torch.Tensor:
+        """Crossfade a list of audio chunks for smooth transitions."""
+        if not chunks:
+            return torch.zeros(1, 0)
+        if len(chunks) == 1:
+            return chunks[0]
+        
+        # Ensure all chunks are 2D [1, samples]
+        processed_chunks = []
+        for chunk in chunks:
+            if chunk.dim() == 1:
+                chunk = chunk.unsqueeze(0)
+            elif chunk.dim() == 3:
+                chunk = chunk.squeeze(0)
+            processed_chunks.append(chunk)
+        
+        result = processed_chunks[0]
+        for i in range(1, len(processed_chunks)):
+            prev = result
+            curr = processed_chunks[i]
+            
+            # Determine overlap length (minimum of crossfade_samples and chunk lengths)
+            overlap = min(crossfade_samples, prev.shape[-1], curr.shape[-1])
+            if overlap <= 0:
+                # No overlap possible, just concatenate
+                result = torch.cat([prev, curr], dim=-1)
+                continue
+            
+            # Create crossfade curves
+            fade_out = torch.linspace(1.0, 0.0, overlap)
+            fade_in = torch.linspace(0.0, 1.0, overlap)
+            
+            # Apply crossfade
+            prev_end = prev[:, -overlap:] * fade_out
+            curr_start = curr[:, :overlap] * fade_in
+            crossfaded = prev_end + curr_start
+            
+            # Concatenate: prev (without overlap) + crossfaded + curr (without overlap)
+            result = torch.cat([
+                prev[:, :-overlap],
+                crossfaded,
+                curr[:, overlap:]
+            ], dim=-1)
+        
+        return result
 
     def _is_cloned_voice(self, voice_id: str) -> bool:
         """Check if a voice ID corresponds to a cloned voice."""
@@ -411,7 +458,11 @@ class LightTTSEngine:
             if self._model_version == "v3" and hasattr(self._model, 'inference_sft_stream'):
                 return self._synthesize_base_segment_streaming(text, spk_id, speed, pitch)
             
-            # For v1/v2, use chunked synthesis with overlap for continuity
+            # For v1/v2, try single-shot first for better prosody (CosyVoice 2 handles long texts well)
+            if self._model_version == "v2" and len(text) <= MIN_CHUNK_THRESHOLD:
+                return self._synthesize_base_segment_single_shot(text, spk_id, speed, pitch)
+            
+            # For v1 or very long texts in v2, use chunked synthesis with crossfade
             return self._synthesize_base_segment_chunked(text, spk_id, speed, pitch)
 
         except Exception as e:
@@ -456,16 +507,56 @@ class LightTTSEngine:
             return self._tensor_to_wav_bytes(speech)
 
         except Exception as e:
-            logger.warning(f"Streaming synthesis failed, falling back to chunked: {e}")
+            logger.warning(f"Streaming synthesis failed, falling back to single-shot: {e}")
+            return self._synthesize_base_segment_single_shot(text, spk_id, speed, pitch)
+
+    def _synthesize_base_segment_single_shot(
+        self, text: str, spk_id: str, speed: float, pitch: float
+    ) -> bytes:
+        """Synthesize base voice in a single shot for the entire text (best prosody)."""
+        try:
+            # Ensure text ends with punctuation
+            target_text = text.strip()
+            if not any(target_text.endswith(p) for p in [".", "!", "?", "。", "！", "？"]):
+                target_text += "."
+
+            logger.debug(f"Single-shot base synthesis: '{target_text[:60]}...'")
+
+            output_generator = self._model.inference_sft(target_text, spk_id, stream=False)
+
+            all_speech_chunks: List[torch.Tensor] = []
+            for out_dict in output_generator:
+                speech = out_dict['tts_speech']
+                if speech.dim() == 3:
+                    speech = speech.squeeze(0)
+                if speech.dim() == 1:
+                    speech = speech.unsqueeze(0)
+                all_speech_chunks.append(speech.cpu())
+
+            if not all_speech_chunks:
+                raise SynthesisError("Model did not generate any audio for base voice (single-shot)")
+
+            speech = torch.cat(all_speech_chunks, dim=-1)
+            logger.debug(f"Single-shot base audio: {speech.shape[-1] / 24000:.2f}s")
+
+            if speed != 1.0:
+                speech = torchaudio.functional.resample(speech, int(24000 * speed), 24000)
+            if pitch != 1.0:
+                speech = self._apply_pitch_shift(speech, pitch)
+
+            return self._tensor_to_wav_bytes(speech)
+
+        except Exception as e:
+            logger.warning(f"Single-shot synthesis failed, falling back to chunked: {e}")
             return self._synthesize_base_segment_chunked(text, spk_id, speed, pitch)
 
     def _synthesize_base_segment_chunked(
         self, text: str, spk_id: str, speed: float, pitch: float
     ) -> bytes:
-        """Synthesize long text by chunks with overlap for prosody continuity (v1/v2)."""
-        # Split long text into chunks
+        """Synthesize long text by chunks with crossfade for prosody continuity (v1/v2 fallback)."""
+        # Split long text into chunks with overlap
         text_chunks = self._split_text_into_chunks(text)
-        logger.debug(f"Base voice: text split into {len(text_chunks)} chunks")
+        logger.debug(f"Base voice: text split into {len(text_chunks)} chunks with overlap")
 
         all_speech_chunks: List[torch.Tensor] = []
 
@@ -496,16 +587,9 @@ class LightTTSEngine:
         if not all_speech_chunks:
             raise SynthesisError("Model did not generate any audio for base voice")
 
-        # Add small silence between chunks for natural pauses
-        silence = torch.zeros(1, CHUNK_SILENCE_SAMPLES)
-        final_chunks = []
-        for i, chunk in enumerate(all_speech_chunks):
-            final_chunks.append(chunk)
-            if i < len(all_speech_chunks) - 1:
-                final_chunks.append(silence)
-
-        speech = torch.cat(final_chunks, dim=-1)
-        logger.debug(f"Final base audio: {speech.shape[-1] / 24000:.2f}s")
+        # Use crossfade instead of silence for smooth transitions
+        speech = self._crossfade_chunks(all_speech_chunks)
+        logger.debug(f"Final base audio (crossfaded): {speech.shape[-1] / 24000:.2f}s")
 
         if speed != 1.0:
             speech = torchaudio.functional.resample(speech, int(24000 * speed), 24000)
