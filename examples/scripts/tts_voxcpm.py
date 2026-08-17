@@ -96,26 +96,51 @@ def tts_voxcpm(
             response = requests.post(TTS_ENDPOINT, json=payload)
             response.raise_for_status()
             
-            result = response.json()
-            print("\n✅ Synthesis completed!")
-            print(f"Audio URL: {result.get('audio_url')}")
-            print(f"Duration: {result.get('duration')}s")
-            print(f"Sample rate: {result.get('sample_rate')}Hz")
+            # Check content type to determine how to handle response
+            content_type = response.headers.get('Content-Type', '')
             
-            # If audio_url is a local path or base64, handle accordingly
-            if output_file and result.get('audio_base64'):
-                import base64
-                audio_data = base64.b64decode(result['audio_base64'])
-                with open(output_file, 'wb') as f:
-                    f.write(audio_data)
-                print(f"Audio saved to: {output_file}")
-            
-            return result
+            if 'application/json' in content_type:
+                # JSON response with metadata (and possibly base64 audio)
+                result = response.json()
+                print("\n✅ Synthesis completed!")
+                print(f"Audio URL: {result.get('audio_url')}")
+                print(f"Duration: {result.get('duration')}s")
+                print(f"Sample rate: {result.get('sample_rate')}Hz")
+                
+                # If audio_url is a local path or base64, handle accordingly
+                if output_file and result.get('audio_base64'):
+                    import base64
+                    audio_data = base64.b64decode(result['audio_base64'])
+                    with open(output_file, 'wb') as f:
+                        f.write(audio_data)
+                    print(f"Audio saved to: {output_file}")
+                
+                return result
+            else:
+                # Binary audio response (WAV, MP3, etc.)
+                print("\n✅ Synthesis completed! Received binary audio data.")
+                print(f"Content-Type: {content_type}")
+                print(f"Content-Length: {len(response.content)} bytes")
+                
+                if output_file:
+                    with open(output_file, 'wb') as f:
+                        f.write(response.content)
+                    print(f"Audio saved to: {output_file}")
+                
+                # Return a mock result for consistency
+                return {
+                    "audio_url": output_file,
+                    "duration": None,
+                    "sample_rate": None,
+                    "size_bytes": len(response.content)
+                }
             
     except requests.exceptions.RequestException as e:
         print(f"\n❌ Error during synthesis: {e}")
         if hasattr(e, 'response') and e.response is not None:
-            print(f"Response: {e.response.text}")
+            print(f"Response status: {e.response.status_code}")
+            print(f"Response headers: {dict(e.response.headers)}")
+            print(f"Response text: {e.response.text[:500]}")
         raise
 
 def demo_all_modes(voice_id: str, text: str = "Hola, esto es una prueba de síntesis de voz con VoxCPM."):
