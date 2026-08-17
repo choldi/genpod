@@ -1,9 +1,1 @@
-torch==2.3.0
-torchaudio==2.3.0
-transformers<4.38
-accelerate
-sentencepiece
-protobuf
-numpy
-soundfile
-rich==13.7.0
+requests>=2.31.0
