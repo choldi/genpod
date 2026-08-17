@@ -8,6 +8,9 @@ build/
 
 # ─── Docker ───
 # (normalmente no se suben imágenes, solo Dockerfile y compose)
+.dockerignore
+docker-compose*.yml
+Dockerfile*
 
 # ─── Aider ───
 .aider.chat.history.md
@@ -34,3 +37,16 @@ data/
 ./scripts
 .aider*
 .aider_model_selection.yml
+
+# ─── Datos y modelos (pesados, no versionar) ───
+data/models/
+data/voices/
+*.pt
+*.bin
+*.safetensors
+*.onnx
+
+# ─── Cache de Python/HuggingFace ───
+.cache/
+.huggingface/
+.transformers/
