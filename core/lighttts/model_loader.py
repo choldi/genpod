@@ -30,7 +30,7 @@ class ModelLoader:
         },
         "voxcpm": {
             "model_dir_name": "VoxCPM",
-            "model_file_patterns": ["*.pt", "*.bin", "*.safetensors", "*.json"],
+            "model_file_patterns": ["*.pt", "*.bin", "*.safetensors", "*.json", "*.yaml", "*.yml"],
             "load_func": "load_voxcpm",
         },
     }
@@ -150,18 +150,79 @@ class ModelLoader:
 
     def _load_voxcpm(self, model_path: Path) -> Tuple[Any, str, Callable]:
         """Load VoxCPM model."""
-        # Placeholder for VoxCPM loading logic
-        # This will be implemented in Phase 2
         try:
-            # Example structure for VoxCPM loading
-            # from voxcpm import VoxCPM
-            # model = VoxCPM.from_pretrained(str(model_path), device=self.device)
-            # load_wav = torchaudio.load  # or custom function
-            # version = "voxcpm-1.0"
+            # Try to import VoxCPM - this assumes a typical structure
+            # Adjust imports based on actual VoxCPM package structure
+            import sys
+            sys.path.insert(0, str(model_path))
             
-            raise NotImplementedError("VoxCPM loading not yet implemented (Phase 2)")
+            # Try different possible import patterns for VoxCPM
+            try:
+                from voxcpm import VoxCPM
+            except ImportError:
+                try:
+                    from models.voxcpm import VoxCPM
+                except ImportError:
+                    try:
+                        from voxcpm.model import VoxCPM
+                    except ImportError as e:
+                        raise ModelLoadError(f"VoxCPM module not found. Tried multiple import patterns: {e}") from e
+            
+            # Load model - VoxCPM might use different loading patterns
+            # Check for config file first
+            config_files = list(model_path.glob("*.yaml")) + list(model_path.glob("*.yml")) + list(model_path.glob("*.json"))
+            config_path = config_files[0] if config_files else None
+            
+            # Check for model weights
+            model_files = list(model_path.glob("*.pt")) + list(model_path.glob("*.bin")) + list(model_path.glob("*.safetensors"))
+            if not model_files:
+                raise ModelLoadError(f"No model weights found in {model_path}")
+            
+            model_weights = model_files[0]
+            
+            # Initialize VoxCPM model
+            # This assumes VoxCPM has a from_pretrained or similar method
+            if hasattr(VoxCPM, 'from_pretrained'):
+                model = VoxCPM.from_pretrained(str(model_path), device=self.device)
+            elif hasattr(VoxCPM, 'load_from_checkpoint'):
+                model = VoxCPM.load_from_checkpoint(str(model_weights), map_location=self.device)
+            else:
+                # Fallback: direct instantiation
+                model = VoxCPM(str(model_path), device=self.device)
+            
+            # Move to device and set eval mode
+            model = model.to(self.device)
+            model.eval()
+            
+            # Get version info
+            version = "voxcpm-1.0"
+            if config_path:
+                try:
+                    import yaml
+                    with open(config_path, 'r') as f:
+                        config = yaml.safe_load(f)
+                    version = config.get('version', version)
+                except Exception:
+                    pass
+            
+            # Define load_wav function for VoxCPM (uses torchaudio typically)
+            def load_wav_voxcpm(wav_path: str) -> torch.Tensor:
+                import torchaudio
+                waveform, sample_rate = torchaudio.load(wav_path)
+                # Resample to 24kHz if needed (VoxCPM default)
+                if sample_rate != 24000:
+                    resampler = torchaudio.transforms.Resample(sample_rate, 24000)
+                    waveform = resampler(waveform)
+                return waveform
+            
+            logger.info(f"VoxCPM model loaded from {model_path}")
+            return model, version, load_wav_voxcpm
+            
         except ImportError as e:
-            raise ModelLoadError(f"VoxCPM not installed: {e}") from e
+            raise ModelLoadError(f"VoxCPM not installed or import failed: {e}") from e
+        except Exception as e:
+            logger.error(f"Failed to load VoxCPM model: {e}", exc_info=True)
+            raise ModelLoadError(f"VoxCPM model loading failed: {e}") from e
 
     def unload_model(self, model_type: str) -> bool:
         """Unload a specific model from memory."""

@@ -80,6 +80,7 @@ class VoiceRegistry:
 
         # This would ideally come from model metadata
         # For now, we use known speaker lists per model type
+        # These should match the actual speakers available in each model
         base_speakers = {
             "cosyvoice2": {
                 "speaker_0": "CosyVoice2 Female 1",
@@ -94,8 +95,10 @@ class VoiceRegistry:
                 "speaker_3": "CosyVoice3 Male 2",
             },
             "voxcpm": {
-                "speaker_0": "VoxCPM Speaker 1",
-                "speaker_1": "VoxCPM Speaker 2",
+                "speaker_0": "VoxCPM Speaker 1 (Female)",
+                "speaker_1": "VoxCPM Speaker 2 (Male)",
+                "speaker_2": "VoxCPM Speaker 3 (Female)",
+                "speaker_3": "VoxCPM Speaker 4 (Male)",
             },
         }
         

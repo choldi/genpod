@@ -132,6 +132,67 @@ class BaseSynthesizer:
 
     def _synthesize_voxcpm(self, text: str, spk_id: str, speed: float) -> torch.Tensor:
         """Synthesize using VoxCPM model."""
-        # Placeholder for VoxCPM synthesis
-        # Will be implemented in Phase 2
-        raise NotImplementedError("VoxCPM synthesis not yet implemented (Phase 2)")
+        try:
+            # VoxCPM speaker ID handling
+            # VoxCPM might use different speaker ID format
+            # Convert spk_id to VoxCPM format if needed
+            voxcpm_spk_id = self._convert_speaker_id(spk_id)
+            
+            # Prepare synthesis parameters
+            # VoxCPM typically expects: text, speaker_id, speed, etc.
+            synthesis_kwargs = {
+                "text": text,
+                "speaker_id": voxcpm_spk_id,
+                "speed": speed,
+            }
+            
+            # Call VoxCPM inference
+            # This assumes VoxCPM has a generate or synthesize method
+            if hasattr(self.model, 'generate'):
+                speech = self.model.generate(**synthesis_kwargs)
+            elif hasattr(self.model, 'synthesize'):
+                speech = self.model.synthesize(**synthesis_kwargs)
+            elif hasattr(self.model, 'inference'):
+                speech = self.model.inference(**synthesis_kwargs)
+            else:
+                # Try direct call if model is callable
+                speech = self.model(**synthesis_kwargs)
+            
+            # Ensure output is torch.Tensor
+            if not isinstance(speech, torch.Tensor):
+                speech = torch.tensor(speech)
+            
+            # Ensure correct shape: [1, samples] or [samples]
+            if speech.dim() == 1:
+                speech = speech.unsqueeze(0)
+            elif speech.dim() > 2:
+                speech = speech.squeeze(0)
+                if speech.dim() > 1:
+                    speech = speech[0:1]  # Take first channel
+            
+            logger.debug(f"VoxCPM synthesis successful: shape={speech.shape}")
+            return speech
+            
+        except Exception as e:
+            logger.error(f"VoxCPM synthesis failed: {e}", exc_info=True)
+            raise RuntimeError(f"VoxCPM synthesis error: {e}") from e
+
+    def _convert_speaker_id(self, spk_id: str) -> str:
+        """Convert generic speaker ID to VoxCPM format."""
+        # VoxCPM might use different speaker naming
+        # Map from our format to VoxCPM format
+        if spk_id.startswith("speaker_"):
+            # Extract number and map to VoxCPM speaker names
+            try:
+                num = int(spk_id.split("_")[1])
+                # VoxCPM might have specific speaker names
+                voxcpm_speakers = {
+                    0: "voxcpm_speaker_0",
+                    1: "voxcpm_speaker_1",
+                    2: "voxcpm_speaker_2",
+                    3: "voxcpm_speaker_3",
+                }
+                return voxcpm_speakers.get(num, f"voxcpm_speaker_{num}")
+            except (IndexError, ValueError):
+                return f"voxcpm_{spk_id}"
+        return f"voxcpm_{spk_id}"

@@ -174,6 +174,63 @@ class ClonedSynthesizer:
         language: str
     ) -> torch.Tensor:
         """Synthesize using VoxCPM model with zero-shot cloning."""
-        # Placeholder for VoxCPM synthesis
-        # Will be implemented in Phase 2
-        raise NotImplementedError("VoxCPM cloned synthesis not yet implemented (Phase 2)")
+        try:
+            # Load reference audio using torchaudio (VoxCPM typically uses 24kHz)
+            import torchaudio
+            prompt_speech, sr = torchaudio.load(str(ref_audio_path))
+            
+            # Resample to 24kHz if needed
+            if sr != 24000:
+                resampler = torchaudio.transforms.Resample(sr, 24000)
+                prompt_speech = resampler(prompt_speech)
+            
+            # Get prompt text from metadata
+            prompt_text = metadata.get("transcript", "")
+            if not prompt_text:
+                logger.warning("No transcript in metadata, zero-shot quality may suffer")
+            
+            # Prepare synthesis parameters for VoxCPM zero-shot
+            # VoxCPM zero-shot typically requires: prompt_speech, prompt_text, target_text
+            synthesis_kwargs = {
+                "text": text,
+                "prompt_speech": prompt_speech,
+                "prompt_text": prompt_text,
+                "speed": speed,
+            }
+            
+            # Add language if supported
+            if language:
+                synthesis_kwargs["language"] = language
+            
+            # Call VoxCPM zero-shot inference
+            if hasattr(self.model, 'generate_zero_shot'):
+                speech = self.model.generate_zero_shot(**synthesis_kwargs)
+            elif hasattr(self.model, 'zero_shot_inference'):
+                speech = self.model.zero_shot_inference(**synthesis_kwargs)
+            elif hasattr(self.model, 'clone_voice'):
+                speech = self.model.clone_voice(**synthesis_kwargs)
+            elif hasattr(self.model, 'inference'):
+                # Some models use a unified inference method
+                speech = self.model.inference(**synthesis_kwargs)
+            else:
+                # Try direct call
+                speech = self.model(**synthesis_kwargs)
+            
+            # Ensure output is torch.Tensor
+            if not isinstance(speech, torch.Tensor):
+                speech = torch.tensor(speech)
+            
+            # Ensure correct shape: [1, samples] or [samples]
+            if speech.dim() == 1:
+                speech = speech.unsqueeze(0)
+            elif speech.dim() > 2:
+                speech = speech.squeeze(0)
+                if speech.dim() > 1:
+                    speech = speech[0:1]  # Take first channel
+            
+            logger.debug(f"VoxCPM zero-shot synthesis successful: shape={speech.shape}")
+            return speech
+            
+        except Exception as e:
+            logger.error(f"VoxCPM zero-shot synthesis failed: {e}", exc_info=True)
+            raise RuntimeError(f"VoxCPM zero-shot synthesis error: {e}") from e
