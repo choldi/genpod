@@ -58,8 +58,7 @@ def tts_voxcpm(
         "emotion": emotion,
         "emotion_tags": use_emotion_tags,
         "chunk_size": chunk_size,
-        # Note: If your API supports model selection, you might add:
-        # "model": "voxcpm"
+        "model": "voxcpm"  # Especificar el modelo VoxCPM
     }
     
     print(f"Synthesizing with VoxCPM ({mode} mode)...")
@@ -69,6 +68,7 @@ def tts_voxcpm(
     print(f"Speed: {speed}, Pitch: {pitch}")
     print(f"Emotion: {emotion}")
     print(f"Use emotion tags: {use_emotion_tags}")
+    print(f"Model: voxcpm")
     
     try:
         if stream:
