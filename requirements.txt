@@ -7,3 +7,8 @@ torchaudio==2.3.0
 python-multipart==0.0.9
 rich==13.7.0
 numpy
+soundfile
+transformers<4.38
+accelerate
+sentencepiece
+protobuf
