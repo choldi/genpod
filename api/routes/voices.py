@@ -152,4 +152,3 @@ def _map_tts_exception(e: TTSException) -> HTTPException:
         detail=e.to_dict(),
         headers=headers
     )
-```
