@@ -40,10 +40,13 @@ def tts_voxcpm(
         speed: Speech speed factor
         pitch: Pitch factor
         emotion: Emotion label
-        emotion_tags: List of emotion tags
+        emotion_tags: List of emotion tags (if provided, enables emotion tagging)
         chunk_size: Chunk size for streaming
         output_file: Output file path (for download mode)
     """
+    # Convert emotion_tags to boolean: True if tags are provided, False otherwise
+    use_emotion_tags = bool(emotion_tags)
+    
     payload = {
         "text": text,
         "voice_id": voice_id,
@@ -53,7 +56,7 @@ def tts_voxcpm(
         "speed": speed,
         "pitch": pitch,
         "emotion": emotion,
-        "emotion_tags": emotion_tags or [],
+        "emotion_tags": use_emotion_tags,
         "chunk_size": chunk_size,
         # Note: If your API supports model selection, you might add:
         # "model": "voxcpm"
@@ -65,6 +68,7 @@ def tts_voxcpm(
     print(f"Streaming: {stream}")
     print(f"Speed: {speed}, Pitch: {pitch}")
     print(f"Emotion: {emotion}")
+    print(f"Use emotion tags: {use_emotion_tags}")
     
     try:
         if stream:
@@ -117,7 +121,7 @@ def tts_voxcpm(
 def demo_all_modes(voice_id: str, text: str = "Hola, esto es una prueba de síntesis de voz con VoxCPM."):
     """Demonstrate all TTS modes with VoxCPM."""
     print("=" * 60)
-    print("VoxCPM TTS DEMO - ALL MODES")
+    print("VOXCPM TTS DEMO - ALL MODES")
     print("=" * 60)
     
     modes = [

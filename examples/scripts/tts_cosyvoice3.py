@@ -40,10 +40,13 @@ def tts_cosyvoice3(
         speed: Speech speed factor
         pitch: Pitch factor
         emotion: Emotion label
-        emotion_tags: List of emotion tags
+        emotion_tags: List of emotion tags (if provided, enables emotion tagging)
         chunk_size: Chunk size for streaming
         output_file: Output file path (for download mode)
     """
+    # Convert emotion_tags to boolean: True if tags are provided, False otherwise
+    use_emotion_tags = bool(emotion_tags)
+    
     payload = {
         "text": text,
         "voice_id": voice_id,
@@ -53,7 +56,7 @@ def tts_cosyvoice3(
         "speed": speed,
         "pitch": pitch,
         "emotion": emotion,
-        "emotion_tags": emotion_tags or [],
+        "emotion_tags": use_emotion_tags,
         "chunk_size": chunk_size
     }
     
@@ -63,6 +66,7 @@ def tts_cosyvoice3(
     print(f"Streaming: {stream}")
     print(f"Speed: {speed}, Pitch: {pitch}")
     print(f"Emotion: {emotion}")
+    print(f"Use emotion tags: {use_emotion_tags}")
     
     try:
         if stream:
