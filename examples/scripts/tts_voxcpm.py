@@ -26,7 +26,8 @@ def tts_voxcpm(
     emotion: str = "neutral",
     emotion_tags: list = None,
     chunk_size: int = 100,
-    output_file: str = None
+    output_file: str = None,
+    model: str = "voxcpm"
 ):
     """
     Synthesize speech using VoxCPM model.
@@ -43,6 +44,7 @@ def tts_voxcpm(
         emotion_tags: List of emotion tags (if provided, enables emotion tagging)
         chunk_size: Chunk size for streaming
         output_file: Output file path (for download mode)
+        model: Model to use for synthesis (default: "voxcpm")
     """
     # Convert emotion_tags to boolean: True if tags are provided, False otherwise
     use_emotion_tags = bool(emotion_tags)
@@ -57,7 +59,8 @@ def tts_voxcpm(
         "pitch": pitch,
         "emotion": emotion,
         "emotion_tags": use_emotion_tags,
-        "chunk_size": chunk_size
+        "chunk_size": chunk_size,
+        "model": model
     }
     
     print(f"Synthesizing with VoxCPM ({mode} mode)...")
@@ -67,6 +70,7 @@ def tts_voxcpm(
     print(f"Speed: {speed}, Pitch: {pitch}")
     print(f"Emotion: {emotion}")
     print(f"Use emotion tags: {use_emotion_tags}")
+    print(f"Model: {model}")
     
     try:
         if stream:
@@ -180,6 +184,7 @@ if __name__ == "__main__":
     parser.add_argument("--output", help="Output file path")
     parser.add_argument("--demo-all", action="store_true", help="Run all modes demo")
     parser.add_argument("--url", default=API_BASE_URL, help=f"API base URL (default: {API_BASE_URL})")
+    parser.add_argument("--model", default="voxcpm", help="Model to use (default: voxcpm)")
     
     args = parser.parse_args()
     API_BASE_URL = args.url
@@ -197,5 +202,6 @@ if __name__ == "__main__":
             speed=args.speed,
             pitch=args.pitch,
             emotion=args.emotion,
-            output_file=args.output
+            output_file=args.output,
+            model=args.model
         )
