@@ -112,6 +112,7 @@ class LightTTSEngine:
         emotion: str = "neutral",
         emotion_tags: bool = False,
         chunk_size: Optional[int] = None,
+        model: Optional[str] = None,
     ) -> Generator[bytes, None, None]:
         """Generate audio chunks for the given text and voice.
 
@@ -128,9 +129,11 @@ class LightTTSEngine:
                 - None (default): Sentence-based chunking (current behavior)
                 - <= 0: No chunking, process entire text at once
                 - > 0: Custom chunk size in characters
+            model: Model identifier (kept for API compatibility, not used)
 
         Note: emotion and emotion_tags parameters are kept for API compatibility
         but are no longer processed - the underlying model handles prosody.
+        The model parameter is also kept for API compatibility but is not used.
         """
         logger.info(
             f"Engine synthesize called: voice_id={voice_id}, text_len={len(text)}, "
