@@ -28,8 +28,17 @@ async def synthesize(
             f"voice_id='{request.voice_id}', language='{request.language}', "
             f"stream={request.stream}, mode='{request.mode}', speed={request.speed}, "
             f"pitch={request.pitch}, emotion='{request.emotion}', emotion_tags={request.emotion_tags}, "
-            f"chunk_size={request.chunk_size}"
+            f"chunk_size={request.chunk_size}, model='{request.model}'"
         )
+        
+        # Validate model parameter
+        supported_models = ["cosyvoice3", "voxcpm"]  # Extend as needed
+        if request.model not in supported_models:
+            logger.error(f"Unsupported model: {request.model}. Supported: {supported_models}")
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Unsupported model: {request.model}. Supported models: {supported_models}"
+            )
         
         # --- MODE LOGIC ---
         is_fast_mode = getattr(request, "mode", "studio") == "fast"
@@ -57,7 +66,7 @@ async def synthesize(
             
         # Respetar el parámetro stream de la petición
         stream = request.stream
-        logger.info(f"Final parameters: speed={speed}, pitch={pitch}, stream={stream}, chunk_size={chunk_size}")
+        logger.info(f"Final parameters: speed={speed}, pitch={pitch}, stream={stream}, chunk_size={chunk_size}, model={request.model}")
         # --- END MODE LOGIC ---
 
         # CRITICAL: Ensure we use the EXACT text from the request
@@ -86,7 +95,7 @@ async def synthesize(
             logger.info("Starting streaming response")
             def audio_generator():
                 try:
-                    logger.debug(f"Streaming synthesis: '{input_text[:50]}...' | chunk_size={effective_chunk_size}")
+                    logger.debug(f"Streaming synthesis: '{input_text[:50]}...' | chunk_size={effective_chunk_size} | model={request.model}")
                     for chunk in engine.synthesize(
                         text=input_text,
                         voice_id=request.voice_id,
@@ -97,6 +106,7 @@ async def synthesize(
                         stream=True,
                         emotion_tags=emotion_tags,
                         chunk_size=effective_chunk_size,
+                        model=request.model,  # Pass model to engine
                     ):
                         yield chunk
                 except Exception as e:
@@ -124,6 +134,7 @@ async def synthesize(
                 stream=False,
                 emotion_tags=emotion_tags,
                 chunk_size=effective_chunk_size,
+                model=request.model,  # Pass model to engine
             ):
                 audio_data += chunk
 
@@ -141,6 +152,8 @@ async def synthesize(
     except SynthesisError as e:
         logger.error(f"Synthesis error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Unexpected error in TTS: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))

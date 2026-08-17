@@ -31,6 +31,7 @@ class TTSRequest(BaseModel):
     emotion: str = Field(default="neutral", description="Emotion (reserved for future use)")
     emotion_tags: bool = Field(default=False, description="Enable emotion tag parsing in text")
     chunk_size: Optional[int] = Field(default=None, ge=0, description="Chunk size for streaming synthesis: >0 splits by characters, 0 no splitting, None uses default (5000 characters)")
+    model: str = Field(default="cosyvoice3", description="Model to use for synthesis (e.g., 'cosyvoice3', 'voxcpm')")
 
 
 class TTSResponse(BaseModel):
