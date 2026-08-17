@@ -1,14 +1,9 @@
-fastapi==0.110.0
-uvicorn[standard]==0.29.0
-httpx==0.27.0
-pydantic-settings==2.3.0
 torch==2.3.0
 torchaudio==2.3.0
-python-multipart==0.0.9
-rich==13.7.0
-numpy
-soundfile
 transformers<4.38
 accelerate
 sentencepiece
 protobuf
+numpy
+soundfile
+rich==13.7.0
