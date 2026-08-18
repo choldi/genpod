@@ -1,11 +1,11 @@
 """Voice management routes with dynamic voice listing."""
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Path
 
 from api.dependencies import get_lighttts_engine
 from api.schemas import VoiceListResponse, VoiceInfo
 from core.lighttts.engine import LightTTSEngine
-from core.exceptions import TTSException
+from core.exceptions import TTSException, ModelNotAvailableError
 from core.logger import get_logger, set_correlation_id, set_request_context, clear_log_context
 
 router = APIRouter()
@@ -121,6 +121,92 @@ async def list_models(
         }
     except Exception as e:
         logger.error(f"Error listing models: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        clear_log_context()
+
+
+@router.post("/models/{model_type}/load")
+async def load_model(
+    model_type: str = Path(..., description="Model type to load (cosyvoice2, cosyvoice3, voxcpm)"),
+    http_request: Request = None,
+    engine: LightTTSEngine = Depends(get_lighttts_engine),
+):
+    """Load a specific model into memory."""
+    correlation_id = set_correlation_id()
+    set_request_context({
+        "endpoint": "/models/{model_type}/load",
+        "method": "POST",
+        "client_ip": http_request.client.host if http_request.client else "unknown",
+        "model_type": model_type
+    })
+    
+    try:
+        logger.info(f"Loading model: {model_type}")
+        
+        if model_type not in engine.SUPPORTED_MODELS:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Unsupported model type: {model_type}. Supported: {engine.SUPPORTED_MODELS}"
+            )
+        
+        # This will load the model if not already loaded
+        engine._ensure_model_loaded(model_type)
+        
+        model_info = engine.get_model_info(model_type)
+        logger.info(f"Model {model_type} loaded successfully")
+        return {
+            "message": f"Model '{model_type}' loaded successfully",
+            "model_info": model_info
+        }
+        
+    except ModelNotAvailableError as e:
+        logger.error(f"Model not available: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error loading model {model_type}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        clear_log_context()
+
+
+@router.post("/models/{model_type}/unload")
+async def unload_model(
+    model_type: str = Path(..., description="Model type to unload (cosyvoice2, cosyvoice3, voxcpm)"),
+    http_request: Request = None,
+    engine: LightTTSEngine = Depends(get_lighttts_engine),
+):
+    """Unload a specific model from memory to free resources."""
+    correlation_id = set_correlation_id()
+    set_request_context({
+        "endpoint": "/models/{model_type}/unload",
+        "method": "POST",
+        "client_ip": http_request.client.host if http_request.client else "unknown",
+        "model_type": model_type
+    })
+    
+    try:
+        logger.info(f"Unloading model: {model_type}")
+        
+        if model_type not in engine.SUPPORTED_MODELS:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Unsupported model type: {model_type}. Supported: {engine.SUPPORTED_MODELS}"
+            )
+        
+        # Prevent unloading the default model if it's the only one loaded? 
+        # For now, allow unloading any model
+        result = engine.unload_model(model_type)
+        
+        if result:
+            logger.info(f"Model {model_type} unloaded successfully")
+            return {"message": f"Model '{model_type}' unloaded successfully"}
+        else:
+            logger.warning(f"Model {model_type} was not loaded")
+            return {"message": f"Model '{model_type}' was not loaded"}
+        
+    except Exception as e:
+        logger.error(f"Error unloading model {model_type}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         clear_log_context()
