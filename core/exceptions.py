@@ -64,11 +64,31 @@ class AudioTooShortError(TTSException):
 class ModelLoadError(TTSException):
     """Raised when the TTS model fails to load."""
     
-    def __init__(self, model_type: str, reason: str, recoverable: bool = True):
+    def __init__(
+        self, 
+        message: str, 
+        model_type: Optional[str] = None, 
+        reason: Optional[str] = None,
+        recoverable: bool = True
+    ):
+        # Extract model_type from message if not provided
+        if model_type is None:
+            # Try to extract from message
+            import re
+            match = re.search(r"model ['\"](\w+)['\"]", message)
+            if match:
+                model_type = match.group(1)
+        
+        details = {}
+        if model_type:
+            details["model_type"] = model_type
+        if reason:
+            details["reason"] = reason
+            
         super().__init__(
-            message=f"Failed to load model '{model_type}': {reason}",
+            message=message,
             error_code="MODEL_LOAD_ERROR",
-            details={"model_type": model_type, "reason": reason},
+            details=details,
             recoverable=recoverable,
             retry_after=30
         )
