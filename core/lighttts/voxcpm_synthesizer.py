@@ -1,3 +1,8 @@
+from typing import Any
+from pydantic import BaseSettings
+from some_module import VoiceManager  # Replace with the actual module where VoiceManager is defined
+import os
+
 class VoxCPMSynthesizer(BaseSynthesizer):
     """Synthesizer for VoxCPM models with streaming and emotion control support."""
     
