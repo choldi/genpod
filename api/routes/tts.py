@@ -52,16 +52,26 @@ async def synthesize(
         supported_models = engine.SUPPORTED_MODELS
         # Handle model selection logic:
         # 1. If model is not provided or empty, use first model alphabetically
-        # 2. If model provided but not supported, return error with list of supported models
-        if not request.model or request.model.strip() == "":
+        # 2. If model provided but not supported (case-insensitive), return error with list of supported models
+        model_input = request.model.strip() if request.model else ""
+        if not model_input:
             request.model = sorted(supported_models)[0]
             logger.info(f"No model provided, using default model: {request.model}")
-        elif request.model not in supported_models:
-            logger.error(f"Unsupported model: {request.model}. Supported: {supported_models}")
-            raise HTTPException(
-                status_code=400, 
-                detail=f"Unsupported model: {request.model}. Supported models: {sorted(supported_models)}"
-            )
+        else:
+            model_lower = model_input.lower()
+            if model_lower in [m.lower() for m in supported_models]:
+                # Find the canonical model name (case-insensitive match)
+                for m in supported_models:
+                    if m.lower() == model_lower:
+                        request.model = m
+                        break
+                logger.info(f"Using model: {request.model} (requested: {model_input})")
+            else:
+                logger.error(f"Unsupported model: {model_input}. Supported: {supported_models}")
+                raise HTTPException(
+                    status_code=400, 
+                    detail=f"Unsupported model: {model_input}. Supported models: {sorted(supported_models)}"
+                )
         
         # --- MODE LOGIC ---
         is_fast_mode = getattr(request, "mode", "studio") == "fast"
@@ -224,7 +234,6 @@ def _map_tts_exception(e: TTSException) -> HTTPException:
     
     status_code = status_codes.get(e.error_code, 500)
     
-    # Add retry-after header for recoverable errors
     headers = {}
     if e.recoverable and e.retry_after:
         headers["Retry-After"] = str(e.retry_after)
