@@ -3,8 +3,6 @@
 import logging
 import os
 import time
-import subprocess
-import sys
 import importlib
 import importlib.util
 from pathlib import Path
@@ -57,7 +55,6 @@ class ModelLoader:
         self.device = device
         self._loaded_models: Dict[str, Tuple[Any, str, Callable]] = {}
         self._model_configs: Dict[str, Dict] = {}
-        self._package_cache: Dict[str, bool] = {}
         
         # Discover available models
         self._discover_models()
@@ -97,58 +94,16 @@ class ModelLoader:
             for model_type, info in self._model_configs.items()
         }
 
-    def ensure_package_installed(self, model_type: str) -> bool:
-        """Ensure required package is installed for model type."""
-        if model_type in self._package_cache:
-            return self._package_cache[model_type]
-        
+    def _is_package_available(self, model_type: str) -> bool:
+        """Check if required package is available for model type."""
         config = self.MODEL_CONFIGS.get(model_type)
         if not config:
-            logger.error(f"Unknown model type: {model_type}")
             return False
-        
         package_name = config["package_name"]
-        min_version = config.get("min_version", "0.0.0")
-        
         try:
-            # Check if package is already installed
             spec = importlib.util.find_spec(package_name)
-            if spec is not None:
-                # Check version
-                module = importlib.import_module(package_name)
-                version = getattr(module, "__version__", "0.0.0")
-                logger.info(f"Package {package_name} v{version} already installed")
-                self._package_cache[model_type] = True
-                return True
-        except ImportError:
-            pass
-        
-        # Try to install package
-        logger.info(f"Installing package {package_name} (>= {min_version})...")
-        try:
-            # Use pip to install
-            result = subprocess.run([
-                sys.executable, "-m", "pip", "install", 
-                f"{package_name}>={min_version}",
-                "--no-cache-dir"
-            ], capture_output=True, text=True, timeout=300)
-            
-            if result.returncode == 0:
-                logger.info(f"Successfully installed {package_name}")
-                self._package_cache[model_type] = True
-                return True
-            else:
-                logger.error(f"Failed to install {package_name}: {result.stderr}")
-                self._package_cache[model_type] = False
-                return False
-                
-        except subprocess.TimeoutExpired:
-            logger.error(f"Timeout installing {package_name}")
-            self._package_cache[model_type] = False
-            return False
-        except Exception as e:
-            logger.error(f"Error installing {package_name}: {e}")
-            self._package_cache[model_type] = False
+            return spec is not None
+        except Exception:
             return False
 
     def load(self, model_type: str = "cosyvoice2") -> Tuple[Any, str, Callable]:
@@ -174,10 +129,13 @@ class ModelLoader:
                 model_type=model_type
             )
 
-        # Ensure package is installed
-        if not self.ensure_package_installed(model_type):
+        # Check if required package is available
+        if not self._is_package_available(model_type):
+            config = self.MODEL_CONFIGS[model_type]
+            package_name = config["package_name"]
             raise ModelLoadError(
-                f"Required package for {model_type} not available",
+                f"Required package '{package_name}' for model type '{model_type}' is not installed. "
+                f"Please install it in the container image.",
                 model_type=model_type
             )
 
@@ -285,10 +243,6 @@ class ModelLoader:
     def _load_voxcpm(self, model_path: Path) -> Tuple[Any, str, Callable]:
         """Load VoxCPM model with robust package handling."""
         try:
-            # Ensure VoxCPM package is available
-            if not self.ensure_package_installed("voxcpm"):
-                raise ModelLoadError("VoxCPM package not available", model_type="voxcpm")
-
             # Import VoxCPM - try multiple import patterns
             VoxCPM = None
             import_patterns = [
