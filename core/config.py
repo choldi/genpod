@@ -5,3 +5,6 @@ class Settings(BaseSettings):
     model_version: str = "v1.0"
     device: str = "cuda"
     # ... otras configuraciones ...
+
+# Crear la instancia que se importa en otros módulos
+settings = Settings()
