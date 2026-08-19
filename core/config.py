@@ -3,13 +3,19 @@ from pydantic import ConfigDict
 
 
 class Settings(BaseSettings):
+    # Rutas por defecto para contenedor Docker
+    MODELS_PATH: str = "/models"
+    VOICES_PATH: str = "/voices"
+    
+    # Configuración de modelo legacy (compatibilidad)
     model_path: str = "./data/models/voxcpm_v1.0.pth"
     model_version: str = "v1.0"
     device: str = "cuda"
-    MODELS_PATH: str = "/models"
-    VOICES_PATH: str = "/voices"
 
-    model_config = ConfigDict(protected_namespaces=())
+    model_config = ConfigDict(
+        protected_namespaces=(),  # Evita warning con campos que empiezan por "model_"
+        extra="ignore"            # Ignora variables de entorno no definidas
+    )
 
     @property
     def DEVICE(self) -> str:
