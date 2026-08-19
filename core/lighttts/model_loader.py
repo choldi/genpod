@@ -241,7 +241,7 @@ class ModelLoader:
             raise ModelLoadError(f"{model_type} loading failed: {e}", model_type=model_type) from e
 
     def _load_voxcpm(self, model_path: Path) -> Tuple[Any, str, Callable]:
-        """Load VoxCPM model with robust package handling."""
+        """Load VoxCPM model with robust package handling and dependency conflict resolution."""
         try:
             # Import VoxCPM - try multiple import patterns
             VoxCPM = None
@@ -259,7 +259,8 @@ class ModelLoader:
                     VoxCPM = getattr(module, class_name)
                     logger.info(f"Successfully imported VoxCPM from {pattern}")
                     break
-                except (ImportError, AttributeError):
+                except (ImportError, AttributeError) as e:
+                    logger.debug(f"Import pattern {pattern} failed: {e}")
                     continue
             
             if VoxCPM is None:
@@ -276,7 +277,7 @@ class ModelLoader:
             model_weights = model_files[0]
             logger.info(f"Loading VoxCPM from {model_weights} with config {config_path}")
 
-            # Initialize VoxCPM model
+            # Initialize VoxCPM model with specific error handling for known dependency conflicts
             try:
                 if hasattr(VoxCPM, 'from_pretrained'):
                     model = VoxCPM.from_pretrained(str(model_path), device=self.device)
@@ -285,6 +286,22 @@ class ModelLoader:
                 else:
                     # Direct instantiation with config
                     model = VoxCPM(str(model_path), device=self.device)
+            except ImportError as e:
+                # Handle specific known dependency conflict: datasets.get_metadata_patterns
+                if "get_metadata_patterns" in str(e) and "datasets.data_files" in str(e):
+                    logger.error(
+                        "VoxCPM dependency conflict detected: modelscope requires older datasets version. "
+                        "This is a known issue with modelscope/datasets compatibility. "
+                        "Solution: Pin datasets version to 2.14.x in requirements (datasets==2.14.7)"
+                    )
+                    raise ModelLoadError(
+                        "VoxCPM failed to load due to modelscope/datasets version conflict. "
+                        "Please install 'datasets==2.14.7' to resolve the get_metadata_patterns import error.",
+                        model_type="voxcpm"
+                    ) from e
+                # Handle other import errors
+                logger.error(f"VoxCPM initialization failed due to import error: {e}", exc_info=True)
+                raise ModelLoadError(f"VoxCPM initialization failed: {e}", model_type="voxcpm") from e
             except Exception as e:
                 logger.error(f"VoxCPM initialization failed: {e}", exc_info=True)
                 raise ModelLoadError(f"VoxCPM initialization failed: {e}", model_type="voxcpm") from e
