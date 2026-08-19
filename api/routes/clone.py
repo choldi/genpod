@@ -69,6 +69,21 @@ async def clone_voice(
 
         logger.info(f"Cloning voice '{voice_name}' from {tmp_path}")
 
+        # Validate model parameter
+        supported_models = engine.SUPPORTED_MODELS
+        # Handle model selection logic:
+        # 1. If model is not provided or empty, use first model alphabetically
+        # 2. If model provided but not supported, return error with list of supported models
+        if not model or model.strip() == "":
+            model = sorted(supported_models)[0]
+            logger.info(f"No model provided for cloning, using default model: {model}")
+        elif model not in supported_models:
+            logger.error(f"Unsupported model for cloning: {model}. Supported: {supported_models}")
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Unsupported model: {model}. Supported models: {sorted(supported_models)}"
+            )
+
         # 2. Llamar al motor (esto devuelve un string: el voice_id)
         voice_id = engine.clone_voice(
             audio_path=tmp_path,

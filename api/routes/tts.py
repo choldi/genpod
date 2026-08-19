@@ -50,11 +50,17 @@ async def synthesize(
         
         # Validate model parameter
         supported_models = engine.SUPPORTED_MODELS
-        if request.model not in supported_models:
+        # Handle model selection logic:
+        # 1. If model is not provided or empty, use first model alphabetically
+        # 2. If model provided but not supported, return error with list of supported models
+        if not request.model or request.model.strip() == "":
+            request.model = sorted(supported_models)[0]
+            logger.info(f"No model provided, using default model: {request.model}")
+        elif request.model not in supported_models:
             logger.error(f"Unsupported model: {request.model}. Supported: {supported_models}")
             raise HTTPException(
                 status_code=400, 
-                detail=f"Unsupported model: {request.model}. Supported models: {supported_models}"
+                detail=f"Unsupported model: {request.model}. Supported models: {sorted(supported_models)}"
             )
         
         # --- MODE LOGIC ---
