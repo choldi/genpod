@@ -1,6 +1,5 @@
 from typing import Any
 from pydantic import BaseSettings
-from some_module import VoiceManager  # Replace with the actual module where VoiceManager is defined
 import os
 
 class VoxCPMSynthesizer(BaseSynthesizer):
@@ -8,24 +7,28 @@ class VoxCPMSynthesizer(BaseSynthesizer):
     
     def __init__(
         self,
-        model: Any,
-        model_version: str,
+        model: str,
         voices_path: str,
         voice_manager: VoiceManager,
-        model_type: str = "voxcpm",
         device: str = "cuda",
         **kwargs
     ):
-        super().__init__(model_type, device, **kwargs)
+        super().__init__(device, **kwargs)
         self.model = model
-        self.model_version = model_version
         self.voices_path = voices_path
-        self.voice, self.speaker = self._load_voice_model()
         self.voice_manager = voice_manager
-        self.model_path = os.path.join("./data/models", f"voxcpm_{model_version}.pth")
         self._check_model_exists()
     
     def _check_model_exists(self):
-        """Verify that the model file exists at the specified path."""
-        if not os.path.exists(self.model_path):
-            raise FileNotFoundError(f"Model file not found: {self.model_path}")
+        """Verificar si el modelo existe en el directorio de modelos."""
+        model_path = os.path.join("./data/models", f"{self.model}.pth")
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(f"Modelo '{self.model}' no encontrado")
+
+    def synthesize(self, text: str) -> bytes:
+        """Synthesize the given text using the selected model."""
+        # Verificar si el modelo existe
+        self._check_model_exists()
+        
+        # Realizar la síntesis de voz
+        # ...

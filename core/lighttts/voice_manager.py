@@ -38,69 +38,26 @@ class VoiceManager:
             raise ValidationError("voice_id", voice_id, "Voice ID must be a non-empty string")
         
         if not metadata or not isinstance(metadata, dict):
-            raise ValidationError("metadata", metadata, "Metadata must be a non-empty dictionary")
-        
-        # Add timestamp if not present
-        if "created_at" not in metadata:
-            metadata["created_at"] = time.time()
-        
-        metadata["updated_at"] = time.time()
-        metadata["voice_id"] = voice_id
-        
-        metadata_path = self.voices_path / f"{voice_id}.json"
-        temp_path = self.voices_path / f"{voice_id}.json.tmp"
-        
-        try:
-            # Write to temporary file first (atomic operation)
-            with open(temp_path, "w", encoding="utf-8") as f:
-                json.dump(metadata, f, ensure_ascii=False, indent=2)
-            
-            # Atomic rename
-            temp_path.replace(metadata_path)
-            logger.debug(f"Saved voice metadata for: {voice_id}")
-        except Exception as e:
-            # Cleanup temp file on error
-            if temp_path.exists():
-                temp_path.unlink(missing_ok=True)
-            logger.error(f"Failed to save voice metadata for {voice_id}: {e}", exc_info=True)
-            raise
+            raise ValidationError("metadata", metadata, "Metadata must be a dictionary")
 
-    def load_voice_metadata(self, voice_id: str) -> Dict[str, Any]:
-        """Load voice metadata from JSON file.
+        # Verificar si el modelo solicitado existe
+        model = metadata.get('model')
+        if model and model != 'cosyvoice2':
+            try:
+                self._check_model_exists(model)
+            except FileNotFoundError as e:
+                logger.error(f"Modelo '{model}' no encontrado: {e}")
+                raise VoiceNotFoundError(f"Modelo '{model}' no encontrado")
 
-        Args:
-            voice_id: Unique voice identifier.
+        # Guardar la metadata
+        with open(self.voices_path / f"{voice_id}.json", "w", encoding="utf-8") as f:
+            json.dump(metadata, f)
 
-        Returns:
-            Voice metadata dictionary.
-
-        Raises:
-            VoiceNotFoundError: If voice metadata not found or corrupted.
-        """
-        if not voice_id:
-            raise VoiceNotFoundError("empty")
-        
-        metadata_path = self.voices_path / f"{voice_id}.json"
-        if not metadata_path.exists():
-            logger.warning(f"Voice metadata not found: {voice_id}")
-            raise VoiceNotFoundError(voice_id)
-        
-        try:
-            with open(metadata_path, "r", encoding="utf-8") as f:
-                metadata = json.load(f)
-            
-            # Validate required fields
-            if not isinstance(metadata, dict):
-                raise VoiceNotFoundError(f"Voice '{voice_id}' has invalid metadata format")
-            
-            logger.debug(f"Loaded voice metadata for: {voice_id}")
-            return metadata
-        except json.JSONDecodeError as e:
-            logger.error(f"Invalid JSON in voice metadata for {voice_id}: {e}", exc_info=True)
-            raise VoiceNotFoundError(f"Voice '{voice_id}' has corrupted metadata")
-        except Exception as e:
-            logger.error(f"Failed to load voice metadata for {voice_id}: {e}", exc_info=True)
-            raise VoiceNotFoundError(f"Voice '{voice_id}' metadata load failed: {e}")
+    def _check_model_exists(self, model: str) -> None:
+        """Verificar si el modelo existe en el directorio de modelos."""
+        model_path = self.voices_path / f"{model}.pth"
+        if not model_path.exists():
+            raise FileNotFoundError(f"Modelo '{model}' no encontrado")
 
     def list_voices(self) -> List[Dict[str, Any]]:
         """List all voice metadata files with error resilience.
