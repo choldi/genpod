@@ -1,0 +1,67 @@
+
+(yt-env) jordi@BCN305jasensi:~/yt-env$ python3 tts_voxcpm.py --text "hola! Como va? Espero que bien" --voice-id francis_es --language es --mode studio --speed 0.8 --output output.wav --url http://debwk.elver-exponential.ts.net:8000/api/v1 --model cosyvoice3
+Synthesizing with VoxCPM (studio mode)...
+Text: hola! Como va? Espero que bien
+Voice ID: francis_es
+Streaming: False
+Speed: 0.8, Pitch: 1.0
+Emotion: neutral
+Use emotion tags: False
+Model: cosyvoice3
+
+❌ Error during synthesis: 503 Server Error: Service Unavailable for url: http://debwk.elver-exponential.ts.net:8000/api/v1/tts
+Response status: 503
+Response headers: {'date': 'Wed, 19 Aug 2026 06:45:02 GMT', 'server': 'uvicorn', 'content-length': '110', 'content-type': 'application/json'}
+Response text: {"error":"ModelLoadError","message":"Model type 'cosyvoice2' not available. Available models: ['cosyvoice3']"}
+Traceback (most recent call last):
+  File "/home/jordi/yt-env/tts_voxcpm.py", line 196, in <module>
+    tts_voxcpm(
+  File "/home/jordi/yt-env/tts_voxcpm.py", line 99, in tts_voxcpm
+    response.raise_for_status()
+  File "/home/jordi/yt-env/lib/python3.12/site-packages/requests/models.py", line 1167, in raise_for_status
+    raise HTTPError(http_error_msg, response=self)
+requests.exceptions.HTTPError: 503 Server Error: Service Unavailable for url: http://debwk.elver-exponential.ts.net:8000/api/v1/tts
+(yt-env) jordi@BCN305jasensi:~/yt-env$ python3 tts_voxcpm.py --text "hola! Como va? Espero que bien" --voice-id francis_es --language es --mode studio --speed 0.8 --output output.wav --url http://debwk.elver-exponential.ts.net:8000/api/v1 --model VoxCPM2
+Synthesizing with VoxCPM (studio mode)...
+Text: hola! Como va? Espero que bien
+Voice ID: francis_es
+Streaming: False
+Speed: 0.8, Pitch: 1.0
+Emotion: neutral
+Use emotion tags: False
+Model: VoxCPM2
+
+❌ Error during synthesis: 503 Server Error: Service Unavailable for url: http://debwk.elver-exponential.ts.net:8000/api/v1/tts
+Response status: 503
+Response headers: {'date': 'Wed, 19 Aug 2026 06:46:06 GMT', 'server': 'uvicorn', 'content-length': '110', 'content-type': 'application/json'}
+Response text: {"error":"ModelLoadError","message":"Model type 'cosyvoice2' not available. Available models: ['cosyvoice3']"}
+Traceback (most recent call last):
+  File "/home/jordi/yt-env/tts_voxcpm.py", line 196, in <module>
+    tts_voxcpm(
+  File "/home/jordi/yt-env/tts_voxcpm.py", line 99, in tts_voxcpm
+    response.raise_for_status()
+  File "/home/jordi/yt-env/lib/python3.12/site-packages/requests/models.py", line 1167, in raise_for_status
+    raise HTTPError(http_error_msg, response=self)
+requests.exceptions.HTTPError: 503 Server Error: Service Unavailable for url: http://debwk.elver-exponential.ts.net:8000/api/v1/tts
+(yt-env) jordi@BCN305jasensi:~/yt-env$ 
+
+
+lighttts-api  | INFO:     Started server process [1]
+lighttts-api  | INFO:     Waiting for application startup.
+lighttts-api  | INFO:     Application startup complete.
+lighttts-api  | INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+lighttts-api  | {"timestamp": "2026-08-19T06:44:13Z", "level": "INFO", "logger": "api.dependencies", "message": "Initializing LightTTSEngine with models_path=/app/data/models, voices_path=/app/data/voices, device=cuda", "module": "dependencies", "function": "get_lighttts_engine", "line": 39}
+lighttts-api  | {"timestamp": "2026-08-19T06:44:13Z", "level": "INFO", "logger": "core.lighttts.engine", "message": "Initializing LightTTSEngine...", "module": "engine", "function": "__init__", "line": 56}
+lighttts-api  | {"timestamp": "2026-08-19T06:44:13Z", "level": "INFO", "logger": "core.lighttts.engine", "message": "Using device: cuda, default model: cosyvoice2", "module": "engine", "function": "__init__", "line": 61}
+lighttts-api  | {"timestamp": "2026-08-19T06:44:13Z", "level": "WARNING", "logger": "core.lighttts.engine", "message": "No model files found in /app/data/models. Expected .pt, .bin, or .safetensors files.", "module": "engine", "function": "_validate_paths", "line": 95}
+lighttts-api  | {"timestamp": "2026-08-19T06:44:13Z", "level": "INFO", "logger": "core.lighttts.model_loader", "message": "Discovering models in /app/data/models", "module": "model_loader", "function": "_discover_models", "line": 67}
+lighttts-api  | {"timestamp": "2026-08-19T06:44:13Z", "level": "INFO", "logger": "core.lighttts.model_loader", "message": "Found cosyvoice3 model at /app/data/models/CosyVoice3-0.5B (4 files)", "module": "model_loader", "function": "_discover_models", "line": 82}
+lighttts-api  | {"timestamp": "2026-08-19T06:44:13Z", "level": "INFO", "logger": "core.lighttts.engine", "message": "Loading model: cosyvoice2", "module": "engine", "function": "_ensure_model_loaded", "line": 116}
+lighttts-api  | {"timestamp": "2026-08-19T06:44:13Z", "level": "ERROR", "logger": "api.dependencies", "message": "Failed to initialize LightTTSEngine: Model type 'cosyvoice2' not available. Available models: ['cosyvoice3']", "exc_info": "Traceback (most recent call last):\n  File \"/app/api/dependencies.py\", line 40, in get_lighttts_engine\n    _lighttts_engine = LightTTSEngine(\n  File \"/app/core/lighttts/engine.py\", line 79, in __init__\n    self._ensure_model_loaded(self.default_model)\n  File \"/app/core/lighttts/engine.py\", line 118, in _ensure_model_loaded\n    model, model_version, load_wav = self._model_loader.load(model_type)\n  File \"/app/core/lighttts/model_loader.py\", line 172, in load\n    raise ModelLoadError(\ncore.exceptions.ModelLoadError: Model type 'cosyvoice2' not available. Available models: ['cosyvoice3']", "module": "dependencies", "function": "get_lighttts_engine", "line": 49}
+lighttts-api  | INFO:     100.68.177.38:53666 - "POST /api/v1/tts HTTP/1.1" 503 Service Unavailable
+lighttts-api  | {"timestamp": "2026-08-19T06:45:02Z", "level": "ERROR", "logger": "api.dependencies", "message": "Returning previous engine initialization error", "module": "dependencies", "function": "get_lighttts_engine", "line": 33}
+lighttts-api  | INFO:     100.68.177.38:53294 - "POST /api/v1/tts HTTP/1.1" 503 Service Unavailable
+lighttts-api  | {"timestamp": "2026-08-19T06:46:06Z", "level": "ERROR", "logger": "api.dependencies", "message": "Returning previous engine initialization error", "module": "dependencies", "function": "get_lighttts_engine", "line": 33}
+lighttts-api  | INFO:     100.68.177.38:58742 - "POST /api/v1/tts HTTP/1.1" 503 Service Unavailable
+
+

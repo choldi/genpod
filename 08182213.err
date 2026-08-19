@@ -1,0 +1,41 @@
+lighttts-api  |   File "/home/appuser/.local/lib/python3.10/site-packages/uvicorn/main.py", line 577, in run
+lighttts-api  |     server.run()
+lighttts-api  |   File "/home/appuser/.local/lib/python3.10/site-packages/uvicorn/server.py", line 65, in run
+lighttts-api  |     return asyncio.run(self.serve(sockets=sockets))
+lighttts-api  |   File "/usr/lib/python3.10/asyncio/runners.py", line 44, in run
+lighttts-api  |     return loop.run_until_complete(main)
+lighttts-api  |   File "/usr/lib/python3.10/asyncio/base_events.py", line 649, in run_until_complete
+lighttts-api  |     return future.result()
+lighttts-api  |   File "/home/appuser/.local/lib/python3.10/site-packages/uvicorn/server.py", line 69, in serve
+lighttts-api  |     await self._serve(sockets)
+lighttts-api  |   File "/home/appuser/.local/lib/python3.10/site-packages/uvicorn/server.py", line 76, in _serve
+lighttts-api  |     config.load()
+lighttts-api  |   File "/home/appuser/.local/lib/python3.10/site-packages/uvicorn/config.py", line 434, in load
+lighttts-api  |     self.loaded_app = import_from_string(self.app)
+lighttts-api  |   File "/home/appuser/.local/lib/python3.10/site-packages/uvicorn/importer.py", line 22, in import_from_string
+lighttts-api  |     raise exc from None
+lighttts-api  |   File "/home/appuser/.local/lib/python3.10/site-packages/uvicorn/importer.py", line 19, in import_from_string
+lighttts-api  |     module = importlib.import_module(module_str)
+lighttts-api  |   File "/usr/lib/python3.10/importlib/__init__.py", line 126, in import_module
+lighttts-api  |     return _bootstrap._gcd_import(name[level:], package, level)
+lighttts-api  |   File "<frozen importlib._bootstrap>", line 1050, in _gcd_import
+lighttts-api  |   File "<frozen importlib._bootstrap>", line 1027, in _find_and_load
+lighttts-api  |   File "<frozen importlib._bootstrap>", line 1006, in _find_and_load_unlocked
+lighttts-api  |   File "<frozen importlib._bootstrap>", line 688, in _load_unlocked
+lighttts-api  |   File "<frozen importlib._bootstrap_external>", line 883, in exec_module
+lighttts-api  |   File "<frozen importlib._bootstrap>", line 241, in _call_with_frames_removed
+lighttts-api  |   File "/app/api/main.py", line 9, in <module>
+lighttts-api  |     from api.dependencies import get_lighttts_engine, get_settings
+lighttts-api  |   File "/app/api/dependencies.py", line 5, in <module>
+lighttts-api  |     from core.lighttts.engine import LightTTSEngine
+lighttts-api  |   File "/app/core/lighttts/__init__.py", line 3, in <module>
+lighttts-api  |     from core.lighttts.engine import LightTTSEngine
+lighttts-api  |   File "/app/core/lighttts/engine.py", line 24, in <module>
+lighttts-api  |     from core.lighttts.voice_manager import VoiceManager
+lighttts-api  |   File "/app/core/lighttts/voice_manager.py", line 9, in <module>
+lighttts-api  |     from core.logger import get_logger
+lighttts-api  |   File "/app/core/logger.py", line 13, in <module>
+lighttts-api  |     from pythonjsonlogger import jsonlogger
+lighttts-api  | ModuleNotFoundError: No module named 'pythonjsonlogger'
+ºº
+

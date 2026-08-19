@@ -35,7 +35,7 @@ logger = get_logger(__name__)
 class LightTTSEngine:
     """Main wrapper class for CosyVoice 2/3 and VoxCPM operations with robust error handling."""
 
-    DEFAULT_MODEL = "cosyvoice2"
+    DEFAULT_MODEL = "voxcpm"
     SUPPORTED_MODELS = ["cosyvoice2", "cosyvoice3", "voxcpm"]
 
     def __init__(

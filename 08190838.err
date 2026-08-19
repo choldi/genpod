@@ -1,0 +1,37 @@
+lighttts-api  | /home/appuser/.local/lib/python3.10/site-packages/pydantic/_internal/_fields.py:160: UserWarning: Field "model_loaded" has conflict with protected namespace "model_".
+lighttts-api  | 
+lighttts-api  | You may be able to resolve this warning by setting `model_config['protected_namespaces'] = ()`.
+lighttts-api  |   warnings.warn(
+lighttts-api  | INFO:     Started server process [1]
+lighttts-api  | INFO:     Waiting for application startup.
+lighttts-api  | {"timestamp": "2026-08-19T06:38:17Z", "level": "INFO", "logger": "api.main", "message": "Starting up LightTTS API...", "module": "main", "function": "lifespan", "line": 26}
+lighttts-api  | ERROR:    Traceback (most recent call last):
+lighttts-api  |   File "/home/appuser/.local/lib/python3.10/site-packages/starlette/routing.py", line 693, in lifespan
+lighttts-api  |     async with self.lifespan_context(app) as maybe_state:
+lighttts-api  |   File "/usr/lib/python3.10/contextlib.py", line 199, in __aenter__
+lighttts-api  |     return await anext(self.gen)
+lighttts-api  |   File "/home/appuser/.local/lib/python3.10/site-packages/fastapi/routing.py", line 133, in merged_lifespan
+lighttts-api  |     async with original_context(app) as maybe_original_state:
+lighttts-api  |   File "/usr/lib/python3.10/contextlib.py", line 199, in __aenter__
+lighttts-api  |     return await anext(self.gen)
+lighttts-api  |   File "/home/appuser/.local/lib/python3.10/site-packages/fastapi/routing.py", line 133, in merged_lifespan
+lighttts-api  |     async with original_context(app) as maybe_original_state:
+lighttts-api  |   File "/usr/lib/python3.10/contextlib.py", line 199, in __aenter__
+lighttts-api  |     return await anext(self.gen)
+lighttts-api  |   File "/home/appuser/.local/lib/python3.10/site-packages/fastapi/routing.py", line 133, in merged_lifespan
+lighttts-api  |     async with original_context(app) as maybe_original_state:
+lighttts-api  |   File "/usr/lib/python3.10/contextlib.py", line 199, in __aenter__
+lighttts-api  |     return await anext(self.gen)
+lighttts-api  |   File "/home/appuser/.local/lib/python3.10/site-packages/fastapi/routing.py", line 133, in merged_lifespan
+lighttts-api  |     async with original_context(app) as maybe_original_state:
+lighttts-api  |   File "/usr/lib/python3.10/contextlib.py", line 199, in __aenter__
+lighttts-api  |     return await anext(self.gen)
+lighttts-api  |   File "/app/api/main.py", line 28, in lifespan
+lighttts-api  |     logger.info(f"Device: {settings.DEVICE}")
+lighttts-api  |   File "/home/appuser/.local/lib/python3.10/site-packages/pydantic/main.py", line 792, in __getattr__
+lighttts-api  |     raise AttributeError(f'{type(self).__name__!r} object has no attribute {item!r}')
+lighttts-api  | AttributeError: 'Settings' object has no attribute 'DEVICE'
+lighttts-api  | 
+lighttts-api  | ERROR:    Application startup failed. Exiting.
+
+
