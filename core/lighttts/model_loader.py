@@ -38,8 +38,8 @@ class ModelLoader:
             "load_func": "load_cosyvoice3",
         },
         "voxcpm": {
-            "model_dir_name": "VoxCPM",
-            "model_file_patterns": ["*.pt", "*.bin", "*.safetensors", "*.json", "*.yaml", "*.yml"],
+            "model_dir_name": "VoxCPM2",
+            "model_file_patterns": ["*.pth", "*.bin", "*.safetensors", "*.json", "*.yaml", "*.yml"],
             "package_name": "voxcpm",
             "min_version": "1.0.0",
             "load_func": "load_voxcpm",
