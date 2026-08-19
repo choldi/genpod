@@ -6,5 +6,10 @@ class Settings(BaseSettings):
     device: str = "cuda"
     # ... otras configuraciones ...
 
+    @property
+    def DEVICE(self) -> str:
+        """Alias en mayúsculas para compatibilidad con código que use settings.DEVICE"""
+        return self.device
+
 # Crear la instancia que se importa en otros módulos
 settings = Settings()
